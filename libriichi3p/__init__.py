@@ -5,8 +5,10 @@ import platform
 import importlib.util
 from common.utils import sub_file
 
-assert sys.version_info >= (3, 10), "Python version must be 3.10 or higher"
-assert sys.version_info <= (3, 12), "Python version must be 3.12 or lower"
+# compare only (major, minor): sys.version_info is e.g. (3, 12, 7, 'final', 0), and that full
+# tuple is > (3, 12), so a bare `<= (3, 12)` wrongly rejects every 3.12.x patch release.
+assert sys.version_info[:2] >= (3, 10), "Python version must be 3.10 or higher"
+assert sys.version_info[:2] <= (3, 12), "Python version must be 3.12 or lower"
 
 def load_module():
     """ Determine system specifics and load the appropriate module file"""

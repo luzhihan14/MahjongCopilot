@@ -89,13 +89,21 @@ class BotManager:
             return
         try:
             self.dashboard = DashboardServer(
-                self, self.st, self.st.dashboard_port, self.st.dashboard_hostname)
+                self, self.st, self.st.dashboard_port, self.st.dashboard_hostname,
+                bind_ip=getattr(self.st, "dashboard_bind_ip", ""))
             self.dashboard.start()
         except Exception as e:  # pylint: disable=broad-except
             LOGGER.error("Failed to start dashboard: %s", e, exc_info=True)
             self.dashboard = None
-            
-        
+
+    def dashboard_url(self) -> str:
+        """ URL the LAN dashboard is actually reachable at (reflects the auto-picked port if the
+        configured one was unavailable), or None if the dashboard isn't running. """
+        if self.dashboard and self.dashboard.port:
+            return self.dashboard.url
+        return None
+
+
     def is_running(self) -> bool:
         """ return True if bot manager thread is running"""
         if self._thread and self._thread.is_alive():

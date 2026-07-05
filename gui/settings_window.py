@@ -16,8 +16,8 @@ class SettingsWindow(tk.Toplevel):
         super().__init__(parent)
         self.st = setting
 
-        self.geometry('700x675')
-        self.minsize(700,675)        
+        self.geometry('700x740')
+        self.minsize(700,740)
         # self.resizable(False, False)
         # set position: within main window
         parent_x = parent.winfo_x()
@@ -111,11 +111,31 @@ class SettingsWindow(tk.Toplevel):
             main_frame, variable=self.proxy_inject_var, text=self.st.lan().CLIENT_INJECT_PROXY, width=std_wid*2)
         check_proxy_inject.grid(row=cur_row, column=2, columnspan=2, **args_entry)  
 
+        # dashboard (LAN web dashboard)
+        cur_row += 1
+        self.enable_dashboard_var = tk.BooleanVar(value=self.st.enable_dashboard)
+        _check = ttk.Checkbutton(
+            main_frame, variable=self.enable_dashboard_var, text=self.st.lan().ENABLE_DASHBOARD, width=std_wid)
+        _check.grid(row=cur_row, column=0, columnspan=2, **args_entry)
+        _label = ttk.Label(main_frame, text=self.st.lan().DASHBOARD_PORT)
+        _label.grid(row=cur_row, column=2, **args_label)
+        self.dashboard_port_var = tk.StringVar(value=self.st.dashboard_port)
+        _entry = ttk.Entry(main_frame, textvariable=self.dashboard_port_var, width=std_wid)
+        _entry.grid(row=cur_row, column=3, **args_entry)
+        # dashboard bind IP
+        cur_row += 1
+        _label = ttk.Label(main_frame, text=self.st.lan().DASHBOARD_BIND_IP)
+        _label.grid(row=cur_row, column=0, **args_label)
+        add_hover_text(_label, self.st.lan().DASHBOARD_BIND_IP_TIP)
+        self.dashboard_bind_ip_var = tk.StringVar(value=self.st.dashboard_bind_ip)
+        _entry = ttk.Entry(main_frame, textvariable=self.dashboard_bind_ip_var, width=std_wid*2)
+        _entry.grid(row=cur_row, column=1, columnspan=2, **args_entry)
+
         # sep
         cur_row += 1
         sep = ttk.Separator(main_frame, orient=tk.HORIZONTAL)
         sep.grid(row=cur_row, column=0, columnspan=4, sticky="ew", pady=5)
-        # Select Model Type        
+        # Select Model Type
         cur_row += 1
         _label = ttk.Label(main_frame, text=self.st.lan().MODEL_TYPE)
         _label.grid(row=cur_row, column=0, **args_label)
@@ -273,6 +293,20 @@ class SettingsWindow(tk.Toplevel):
         proxy_inject_new = self.proxy_inject_var.get()
         if upstream_proxy_new != self.st.upstream_proxy or mitm_port_new != self.st.mitm_port or proxy_inject_new != self.st.enable_proxinject:
             self.mitm_proxinject_updated = True
+
+        # dashboard
+        try:
+            dashboard_port_new = int(self.dashboard_port_var.get())
+            assert 1 <= dashboard_port_new <= 65535
+        except (ValueError, AssertionError):
+            messagebox.showerror("⚠", self.st.lan().DASHBOARD_PORT)
+            return
+        dashboard_bind_ip_new = self.dashboard_bind_ip_var.get().strip()
+        enable_dashboard_new = self.enable_dashboard_var.get()
+        if (enable_dashboard_new != self.st.enable_dashboard
+                or dashboard_port_new != self.st.dashboard_port
+                or dashboard_bind_ip_new != self.st.dashboard_bind_ip):
+            self.mitm_proxinject_updated = True   # reuse the "restart to apply" prompt
         
         # language
         language_name = self.language_var.get()
@@ -331,6 +365,9 @@ class SettingsWindow(tk.Toplevel):
         self.st.upstream_proxy = upstream_proxy_new
         self.st.language = language_new
         self.st.enable_proxinject = proxy_inject_new
+        self.st.enable_dashboard = enable_dashboard_new
+        self.st.dashboard_port = dashboard_port_new
+        self.st.dashboard_bind_ip = dashboard_bind_ip_new
         
         self.st.model_type = model_type_new
         self.st.model_file = model_file_new

@@ -41,6 +41,11 @@ class LanStr:
     AUTO_LAUNCH_BROWSER = "Auto Launch Browser"
     MITM_PORT = "MITM Server Port"
     UPSTREAM_PROXY = "Upstream Proxy"
+    ENABLE_DASHBOARD = "Enable LAN Dashboard"
+    DASHBOARD_PORT = "Dashboard Port"
+    DASHBOARD_BIND_IP = "Dashboard Bind IP"
+    DASHBOARD_BIND_IP_TIP = ("Local IP to bind the dashboard to (blank = all interfaces). Set a "
+                             "second IP to share port 80 with another app. Port <1024 needs sudo.")
     CLIENT_SIZE = "Client Size"
     MAJSOUL_URL = "Majsoul URL"
     ENABLE_CHROME_EXT = "Enable Chrome Extensioins"
@@ -175,6 +180,11 @@ class LanStrZHS(LanStr):
     SETTINGS_TIPS = "MITM 代理相关设置项重启后生效"
     MITM_PORT = "MITM 服务端口"
     UPSTREAM_PROXY = "上游代理"
+    ENABLE_DASHBOARD = "启用局域网面板"
+    DASHBOARD_PORT = "面板端口"
+    DASHBOARD_BIND_IP = "面板绑定 IP"
+    DASHBOARD_BIND_IP_TIP = ("绑定面板的本机 IP（留空=所有网卡）。设为第二个 IP 可与其他程序共用 80 端口。"
+                             "端口小于 1024 需要 sudo。")
     CLIENT_SIZE = "客户端大小"
     MAJSOUL_URL = "雀魂网址"
     ENABLE_CHROME_EXT = "启用浏览器插件"

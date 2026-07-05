@@ -36,6 +36,10 @@ class Settings:
         # port 80 gives a clean http://mahjongsoul.local (needs sudo; falls back to 8080 if unprivileged)
         self.dashboard_port:int = self._get_value("dashboard_port", 80, lambda x: 1 <= x <= 65535)
         self.dashboard_hostname:str = self._get_value("dashboard_hostname", "mahjongsoul.local")
+        # bind the dashboard to a specific local IP instead of all interfaces (""/0.0.0.0). Lets it
+        # share port 80 with another 0.0.0.0:80 app when this machine has a 2nd IP: bind that IP here
+        # and the hostname is advertised pointing at it, so http://<hostname> stays conflict-free.
+        self.dashboard_bind_ip:str = self._get_value("dashboard_bind_ip", "")
 
         # AI Model settings
         self.model_type:str = self._get_value("model_type", "Local")

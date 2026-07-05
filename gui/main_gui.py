@@ -174,8 +174,9 @@ class MainGUI(tk.Tk):
         self.grid_frame.grid_rowconfigure(cur_row, weight=0)
         
         # === status bar ===
+        # columns: 0 main thread | 1 game client | 2 dashboard URL | 3 status (expands)
         cur_row += 1
-        self.status_bar = StatusBar(self.grid_frame, 3)
+        self.status_bar = StatusBar(self.grid_frame, 4)
         self.status_bar.grid(row=cur_row, column=0, sticky='ew', padx=1, pady=1)
         self.grid_frame.grid_rowconfigure(cur_row, weight=0)
     
@@ -270,7 +271,7 @@ class MainGUI(tk.Tk):
         if messagebox.askokcancel(self.st.lan().EXIT, self.st.lan().EIXT_CONFIRM, parent=self):
             try:
                 LOGGER.info("Exiting GUI and program")
-                self.status_bar.update_column(2, self.st.lan().EXIT + "ing...", self.icon_yellow)
+                self.status_bar.update_column(3, self.st.lan().EXIT + "ing...", self.icon_yellow)
                 self.update_idletasks()
                 self.st.save_json()
                 self.bot_manager.stop(True)
@@ -405,10 +406,17 @@ class MainGUI(tk.Tk):
             status_str = self.st.lan().GAME_NOT_RUNNING
             icon = self.icon_ready
         self.status_bar.update_column(1, status_str, icon)
-            
+
+        # dashboard URL (shows the actually-bound port, which may differ from the configured one)
+        dash_url = self.bot_manager.dashboard_url()
+        if dash_url:
+            self.status_bar.update_column(2, '🌐 ' + dash_url, self.icon_green)
+        else:
+            self.status_bar.update_column(2, '', self.icon_gray)
+
         # status (last col)
         status_str, icon = self._get_status_text_icon(gi)
-        self.status_bar.update_column(2, status_str, icon)
+        self.status_bar.update_column(3, status_str, icon)
         
         ### update overlay
         self.bot_manager.update_overlay()

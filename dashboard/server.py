@@ -44,13 +44,15 @@ class DashboardServer:
     """ Flask + mDNS dashboard server, run in a background thread. """
 
     def __init__(self, bot_manager, settings, port: int = 80, host_name: str = "mahjongsoul.local",
-                 fallback_port: int = 8080):
+                 fallback_port: int = 8080, bind_ip: str = ""):
         self.bot_manager = bot_manager
         self.st = settings
         self.req_port = port                # requested port (80 -> clean URL, needs privileges)
         self.fallback_port = fallback_port  # used if the requested port can't be bound unprivileged
         self.port = None                    # the port actually bound, set in start()
         self.host_name = host_name
+        self.bind_ip = bind_ip              # specific local IP to bind (""/None -> all interfaces)
+        self.bind_host = bind_ip or "0.0.0.0"
 
         self._server = None
         self._thread: threading.Thread = None
@@ -64,7 +66,8 @@ class DashboardServer:
         """ start the web server thread and register mDNS """
         if self._thread and self._thread.is_alive():
             return
-        self._ip = lan_ip()
+        # advertise (and report) the specific bind IP when one is set, else the default-route IP
+        self._ip = self.bind_ip or lan_ip()
         app = self._build_app()
         self.port = self._bind_server(app)
         if self.port is None:
@@ -75,25 +78,58 @@ class DashboardServer:
         LOGGER.info("Dashboard running at %s  (also %s)", self.url, self._ip_url())
 
     def _bind_server(self, app) -> int | None:
-        """ bind the requested port, falling back to fallback_port if it needs privileges we lack """
+        """ bind the requested port, automatically falling back to another port if it can't be
+        bound (already in use, or a privileged port <1024 we lack rights for). Tries, in order:
+        the requested port, the configured fallback_port, then port 0 (an OS-assigned free port)
+        as a last resort — so the dashboard comes up on *some* port instead of failing. """
         candidates = [self.req_port]
-        if self.req_port < 1024 and self.fallback_port and self.fallback_port != self.req_port:
+        if self.fallback_port and self.fallback_port != self.req_port:
             candidates.append(self.fallback_port)
+        candidates.append(0)   # last resort: let the OS pick any free port
         for p in candidates:
-            try:
-                self._server = make_server("0.0.0.0", p, app, threaded=True)
-                if p != self.req_port:
-                    LOGGER.warning(
-                        "Dashboard: port %d needs elevated privileges; using %d instead. "
-                        "Run the app with sudo to serve on port %d (clean http://%s).",
-                        self.req_port, p, self.req_port, self.host_name)
-                return p
-            except PermissionError:
-                LOGGER.warning("Dashboard: binding port %d needs elevated privileges (run with sudo).", p)
-            except OSError as e:
-                LOGGER.warning("Dashboard: could not bind port %d: %s", p, e)
-        LOGGER.error("Dashboard: could not bind a port; dashboard disabled.")
+            server = self._make_server(app, p)
+            if server is None:
+                continue
+            self._server = server
+            bound = server.server_port   # actual bound port (differs from p when p == 0)
+            if bound != self.req_port:
+                hint = (f" Run the app with sudo to serve on port {self.req_port} "
+                        f"(clean http://{self.host_name}).") if self.req_port < 1024 else ""
+                LOGGER.warning(
+                    "Dashboard: port %d unavailable (in use or needs privileges); "
+                    "using port %d instead - reach it at http://%s:%d.%s",
+                    self.req_port, bound, self.host_name, bound, hint)
+            return bound
+        LOGGER.error("Dashboard: could not bind any port; dashboard disabled.")
         return None
+
+    def _make_server(self, app, port: int):
+        """ create the werkzeug server on `port`, or return None if the port is unavailable.
+
+        We probe the port with our own socket first: werkzeug's make_server does NOT raise on a
+        bind failure - it prints a message and calls sys.exit(1) (raising SystemExit), which would
+        kill the app instead of letting us fall back. Probing lets us detect the failure and move
+        on. SO_REUSEADDR mirrors werkzeug's own bind so a TIME_WAIT socket isn't a false negative. """
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        # SO_REUSEADDR mirrors werkzeug's own bind: it avoids a TIME_WAIT false negative, and lets a
+        # specific-IP bind coexist with another app's 0.0.0.0:<port> (how we share port 80 via a 2nd IP).
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            probe.bind((self.bind_host, port))
+        except PermissionError:
+            LOGGER.warning("Dashboard: binding %s:%d needs elevated privileges (run with sudo).",
+                           self.bind_host, port)
+            return None
+        except OSError as e:
+            LOGGER.warning("Dashboard: could not bind %s:%d: %s", self.bind_host, port, e)
+            return None
+        finally:
+            probe.close()
+        try:
+            return make_server(self.bind_host, port, app, threaded=True)
+        except (SystemExit, OSError) as e:   # lost a race for the port between probe and real bind
+            LOGGER.warning("Dashboard: %s:%d became unavailable: %s", self.bind_host, port, e)
+            return None
 
     def stop(self):
         """ stop the server and unregister mDNS """
