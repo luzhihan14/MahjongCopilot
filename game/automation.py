@@ -802,15 +802,22 @@ class Automation:
                 LOGGER.debug("Visual sees main menu with diff %.1f", diff)
                 self.ui_state = UiState.MAIN_MENU
                 break
-            # diagnostic: main menu NOT matched, so we are about to click GAMEOVER.
-            # If the menu is actually on screen, this diff reveals why it isn't matching
+            # diagnostic: main menu NOT matched. This diff reveals why it isn't matching
             # (just above threshold -> raise main_menu_match_threshold; far above -> template is stale).
-            LOGGER.debug(
-                "End game: main-menu template NOT matched (diff=%.1f, threshold=%.0f), clicking GAMEOVER %s",
-                diff, thres, Positions.GAMEOVER[0])
+            LOGGER.debug("End game: main-menu template NOT matched (diff=%.1f, threshold=%.0f)", diff, thres)
 
             yield ActionStepDelay(random.uniform(2,3))
 
+            # Re-check after the wait: the menu may have appeared while we waited. If so,
+            # clicking GAMEOVER now would land on the lobby (e.g. opening the shop) instead
+            # of a result-screen button, so finish here instead of clicking.
+            res, diff = self.g_v.comp_temp(ImgTemp.MAIN_MENU, thres)
+            if res:
+                LOGGER.debug("Visual sees main menu with diff %.1f (menu appeared during delay; skipping click)", diff)
+                self.ui_state = UiState.MAIN_MENU
+                break
+
+            LOGGER.debug("End game: clicking GAMEOVER %s (diff=%.1f)", Positions.GAMEOVER[0], diff)
             x,y = Positions.GAMEOVER[0]
             for step in self.steps_randomized_move_click(x,y):
                 yield step
