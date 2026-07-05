@@ -1,0 +1,57 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Overview
+
+Mahjong Copilot is a desktop AI assistant for Majsoul (雀魂), based on the Mortal model and MJAI protocol. It intercepts Majsoul websocket traffic via a MITM proxy, feeds game events to an AI bot, and displays step-by-step guidance (with optional in-browser overlay) and/or auto-plays via browser automation. Supports 3-person and 4-person mahjong. GPL v3 licensed.
+
+## Commands
+
+```bash
+# Setup (Python 3.11 recommended)
+python -m venv venv
+source venv/bin/activate            # Windows: CALL venv\Scripts\activate.bat
+pip install -r requirements.txt "numpy<2"   # numpy is unpinned but numpy 2.x breaks the pinned torch 2.2.1
+PLAYWRIGHT_BROWSERS_PATH=0 playwright install chromium
+
+# Run (PLAYWRIGHT_BROWSERS_PATH=0 is needed at runtime too — the app does not set it)
+PLAYWRIGHT_BROWSERS_PATH=0 python main.py
+
+# Lint (config in .pylintrc: max-line-length=120)
+pylint <file_or_package>
+
+# Build Windows executable (PyInstaller)
+scripts/generate_exe.bat
+```
+
+There is no test suite (`test/` is gitignored). Verification is manual — run the app.
+
+Runtime artifacts are created in the repo root and gitignored: `settings.json` (auto-created with defaults), `models/` (Mortal model weight files go here), `log/`, `browser_data/`, `mitm_config/`, `temp/`.
+
+## Architecture
+
+Data flow (see `assets/design_struct.png`):
+
+```
+Majsoul server ⇄ mitm.py (mitmproxy) ⇄ game client (Playwright browser or proxied desktop client)
+                     │ WSMessage queue
+                     ▼
+bot_manager.py (BotManager thread) — liqi.py parses protobuf → routes by websocket flow (lobby vs game)
+                     ▼
+game/game_state.py (GameState) — converts Majsoul "liqi" messages to MJAI protocol events
+                     ▼
+bot/ (Bot) — MJAI in → MJAI reaction out
+                     ▼
+game/automation.py → game/browser.py (clicks, overlay)   +   gui/ (tkinter display)
+```
+
+- **Two protocols**: Majsoul's protobuf-based "liqi" protocol ([liqi.py](liqi.py), definitions in [liqi_proto/](liqi_proto/)) and the MJAI protocol (https://mjai.app) used as the bot interface. `GameState` is the translation layer and holds per-game/per-kyoku state.
+- **Bots** ([bot/](bot/)): `Bot` abstract class in [bot/bot.py](bot/bot.py); implementations selected by `bot/factory.py:get_bot()` from `settings.model_type` — `"Local"` (Mortal weights via compiled libriichi), `"AkagiOT"` (online server), `"MJAPI"` (online API). Each bot declares `supported_modes` (`GameMode.MJ4P`/`MJ3P`). Adding a model type: implement `Bot`, register in `factory.py` and `MODEL_TYPE_STRINGS`.
+- **libriichi / libriichi3p**: precompiled Rust binaries (.pyd/.so) providing the Mortal engine bindings. 4P falls back to the `riichi` pip package if `libriichi` is absent; 3P requires binaries manually placed in [libriichi3p/](libriichi3p/).
+- **MJAI reach quirk**: a self-`reach` reaction gets the follow-up discard attached under a `reach_dahai` key (see `BotMjai.react`), and the next incoming self-reach message is ignored to avoid double-feeding the engine.
+- **Automation** ([game/automation.py](game/automation.py)): converts an MJAI reaction into `ActionStep` lists (delays, mouse moves, clicks). Screen positions are constants in 16×9 units, scaled to the browser viewport at execution time. In-game steps are re-verified each step and cancelled if the action expired (e.g. someone else Pon'd before your Chi). Failed automation is retried from `BotManager._loop_post_msg`.
+- **Threading model**: tkinter GUI runs on the main thread and polls `BotManager` state; `BotManager._run` loops in its own thread consuming the mitm message queue; `GameBrowser` runs Playwright (sync API) in its own thread fed by an action queue; mitm, proxinject, automation tasks, and the updater each run in their own threads. Cross-thread communication is via queues and flags (e.g. `bot_need_update`), not direct calls.
+- **Settings** ([common/settings.py](common/settings.py)): attribute names must match the keys in `settings.json` — saving iterates instance variables. New settings need a default value and validator in `Settings.__init__`, plus GUI exposure in [gui/settings_window.py](gui/settings_window.py).
+- **Localization** ([common/lan_str.py](common/lan_str.py)): `LanStr` is the English base class; other languages subclass it and register in `LAN_OPTIONS`. Any user-visible string must be added to `LanStr` (and translated in subclasses), accessed via `settings.lan()`.
+- **proxinject** ([proxinject.py](proxinject.py)): Windows-only; injects the SOCKS5 proxy into the Majsoul desktop client process. Enabling it forces mitm into SOCKS5 mode and disables the upstream proxy.
