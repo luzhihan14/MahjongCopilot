@@ -99,12 +99,35 @@ step "Installing Playwright Chromium (PLAYWRIGHT_BROWSERS_PATH=0)"
 PLAYWRIGHT_BROWSERS_PATH=0 "$PY" -m playwright install chromium
 
 # ---------------------------------------------------------------- 4. AI models
-step "Installing AI models (Akagi v3 placeholder weights)"
+step "Installing / verifying AI models"
 have_3p_bindings() { ls libriichi3p/libriichi3p-* >/dev/null 2>&1; }
-if [ "${FORCE_MODELS:-0}" != "1" ] && [ -f models/mortal.pth ] && [ -f models/mortal_3p.pth ] && have_3p_bindings; then
-    info "Models already present (set FORCE_MODELS=1 to re-download) - skipping"
-else
-    TMP="$(mktemp -d)"
+
+# Standalone check: does the local Mortal model actually load through the app's own
+# code path? Exits 0 only if the 4P model loads (same load the app does at startup).
+model_loads() {
+    PLAYWRIGHT_BROWSERS_PATH=0 PYTHONPATH="$ROOT" "$PY" - <<'PYEOF'
+import sys
+try:
+    from common.settings import Settings
+    from common.utils import Folder, GameMode, sub_file
+    from bot.local.bot_local import BotMortalLocal
+    st = Settings()
+    files = {GameMode.MJ4P: sub_file(Folder.MODEL, st.model_file),
+             GameMode.MJ3P: sub_file(Folder.MODEL, st.model_file_3p)}
+    modes = [m.value for m in BotMortalLocal(files).supported_modes]
+except Exception as e:   # pylint: disable=broad-except
+    print(f"    model check: load error: {e}")
+    sys.exit(2)
+if "4P" in modes:
+    print(f"    model check: local Mortal loads OK (modes: {modes})")
+    sys.exit(0)
+print(f"    model check: 4P model NOT loadable (modes: {modes})")
+sys.exit(1)
+PYEOF
+}
+
+download_models() {
+    local TMP; TMP="$(mktemp -d)"
     trap 'rm -rf "$TMP"' EXIT
     for rel in release4p release3p; do
         info "Downloading $rel.zip"
@@ -122,6 +145,18 @@ else
     cp "$TMP"/release3p/libriichi/libriichi3p-* libriichi3p/
     info "Installed models/mortal.pth, models/mortal_3p.pth, libriichi3p bindings"
     info "NOTE: placeholder weights - weak by design. Stronger models via Akagi Discord."
+}
+
+if [ "${FORCE_MODELS:-0}" = "1" ]; then
+    info "FORCE_MODELS=1 -> re-downloading models"
+    download_models
+    model_loads || die "Model still won't load after forced download. Check models/ and libriichi3p/."
+elif model_loads && have_3p_bindings; then
+    info "Model already present and loadable (set FORCE_MODELS=1 to re-download) - skipping"
+else
+    info "Model missing or not loadable - downloading and installing"
+    download_models
+    model_loads || die "Model still won't load after download. Check models/*.pth, libriichi3p/ bindings, and that Python is 3.10-3.12."
 fi
 
 # ---------------------------------------------------------------- 5. smoke test

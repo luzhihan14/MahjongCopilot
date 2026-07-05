@@ -16,6 +16,7 @@ venv/
 # Local folder/files
 browser_data/
 log/
+records/
 mitm_config/
 temp/
 /models/*

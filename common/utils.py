@@ -33,6 +33,7 @@ class Folder:
     BROWSER_DATA = "browser_data"
     RES = 'resources'
     LOG = 'log'
+    RECORD = 'records'
     MITM_CONF = 'mitm_config'
     PROXINJECT = 'proxinject'
     UPDATE = "update"

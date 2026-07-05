@@ -102,6 +102,11 @@ class MainGUI(tk.Tk):
         self.switch_autoplay = ToggleSwitch(
             self.tb2, self.st.lan().AUTOPLAY, tb_ht, font_size=sw_ft_sz, command=self._on_switch_autoplay_clicked)
         self.switch_autoplay.pack(**pack_args)
+        # game record
+        self.tb2.add_sep()
+        self.switch_record = ToggleSwitch(
+            self.tb2, self.st.lan().GAME_RECORD, tb_ht, font_size=sw_ft_sz, command=self._on_switch_record_clicked)
+        self.switch_record.pack(**pack_args)
         # auto join
         self.tb2.add_sep()
         self.switch_autojoin = ToggleSwitch(
@@ -212,6 +217,14 @@ class MainGUI(tk.Tk):
             self.bot_manager.enable_automation()
             
 
+    def _on_switch_record_clicked(self):
+        self.switch_record.switch_mid()
+        if self.st.enable_game_record:
+            self.bot_manager.disable_game_record()
+        else:
+            self.bot_manager.enable_game_record()
+
+
     def _on_switch_autojoin_clicked(self):
         self.switch_autojoin.switch_mid()
         if self.st.auto_join_game:
@@ -307,6 +320,7 @@ class MainGUI(tk.Tk):
         sw_list = [
             (self.switch_overlay, lambda: self.st.enable_overlay),
             (self.switch_autoplay, lambda: self.st.enable_automation),
+            (self.switch_record, lambda: self.st.enable_game_record),
             (self.switch_autojoin, lambda: self.st.auto_join_game)
         ]
         for sw, func in sw_list:

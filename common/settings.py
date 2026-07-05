@@ -30,7 +30,13 @@ class Settings:
         self.inject_process_name:str = self._get_value("inject_process_name", "jantama_mahjongsoul")
         self.language:str = self._get_value("language", list(LAN_OPTIONS.keys())[-1], self.valid_language)  # language code
         self.enable_overlay:bool = self._get_value("enable_overlay", True, self.valid_bool) # not shown
-        
+
+        # Web dashboard (LAN, reachable at http://<dashboard_hostname>:<dashboard_port>)
+        self.enable_dashboard:bool = self._get_value("enable_dashboard", True, self.valid_bool)
+        # port 80 gives a clean http://mahjongsoul.local (needs sudo; falls back to 8080 if unprivileged)
+        self.dashboard_port:int = self._get_value("dashboard_port", 80, lambda x: 1 <= x <= 65535)
+        self.dashboard_hostname:str = self._get_value("dashboard_hostname", "mahjongsoul.local")
+
         # AI Model settings
         self.model_type:str = self._get_value("model_type", "Local")
         """ model type: local, mjapi"""
@@ -59,7 +65,14 @@ class Settings:
         self.delay_random_upper:float = self._get_value(
             "delay_random_upper",max(2, self.delay_random_lower), lambda x: x >= self.delay_random_lower)
         self.auto_retry_interval:float = self._get_value("auto_retry_interval", 1.5, lambda x: 0.5 < x < 30.0)  # not shown
-        
+        # visual match tolerance for detecting the Majsoul main menu (lower = stricter).
+        # raise it if a Majsoul UI update makes the menu stop being recognized (see log 'diff=').
+        self.main_menu_match_threshold:float = self._get_value(
+            "main_menu_match_threshold", 45.0, lambda x: 5 <= x <= 200)
+
+        # Game record (save mjai event stream to disk for later AI training)
+        self.enable_game_record:bool = self._get_value("enable_game_record", False, self.valid_bool)
+
         self.auto_join_game:bool = self._get_value("auto_join_game", False, self.valid_bool)
         self.auto_join_level:int = self._get_value("auto_join_level", 1, self.valid_game_level)
         self.auto_join_mode:int = self._get_value("auto_join_mode", utils.GAME_MODES[0], self.valid_game_mode)

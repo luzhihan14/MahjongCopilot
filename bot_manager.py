@@ -10,7 +10,10 @@ import threading
 
 from game.browser import GameBrowser
 from game.game_state import GameState
+from game.game_record import save_mjai_record
 from game.automation import Automation, UiState, JOIN_GAME, END_GAME
+from dashboard import DashboardServer, SessionStats
+from dashboard.mj_parse import parse_account, parse_end_result
 import mitm
 import proxinject
 import liqi
@@ -44,6 +47,9 @@ class BotManager:
         self.automation = Automation(self.browser, self.st)
         self.bot:Bot = None
 
+        self.session_stats = SessionStats()             # stats since app start (for dashboard)
+        self.dashboard:DashboardServer = None           # LAN web dashboard, started in start()
+
         self._thread:threading.Thread = None
         self._stop_event = threading.Event()
         self.fps_counter = FPSCounter()
@@ -66,13 +72,28 @@ class BotManager:
             daemon=True
         )
         self._thread.start()
-        
-    
+        self._start_dashboard()
+
+
     def stop(self, join_thread:bool):
         """ Stop bot manager thread"""
         self._stop_event.set()
+        if self.dashboard:
+            self.dashboard.stop()
         if join_thread:
             self._thread.join()
+
+    def _start_dashboard(self):
+        """ start the LAN web dashboard if enabled in settings"""
+        if not getattr(self.st, "enable_dashboard", False):
+            return
+        try:
+            self.dashboard = DashboardServer(
+                self, self.st, self.st.dashboard_port, self.st.dashboard_hostname)
+            self.dashboard.start()
+        except Exception as e:  # pylint: disable=broad-except
+            LOGGER.error("Failed to start dashboard: %s", e, exc_info=True)
+            self.dashboard = None
             
         
     def is_running(self) -> bool:
@@ -203,6 +224,18 @@ class BotManager:
         self.automation.stop_previous()
         
         
+    def enable_game_record(self):
+        """ enable saving game records to disk"""
+        LOGGER.debug("Bot Manager enabling game record")
+        self.st.enable_game_record = True
+
+
+    def disable_game_record(self):
+        """ disable saving game records to disk"""
+        LOGGER.debug("Bot Manager disabling game record")
+        self.st.enable_game_record = False
+
+
     def enable_autojoin(self):
         """ enable autojoin"""
         LOGGER.debug("Enabling Auto Join")
@@ -371,7 +404,8 @@ class BotManager:
                     LOGGER.info("Lobby oauth2Login msg: %s", liqimsg)
                     LOGGER.info("Lobby login done. lobby flow ID = %s", msg.flow_id)                   
                     self.lobby_flow_id = msg.flow_id
-                    self.automation.on_lobby_login(liqimsg)                    
+                    self.automation.on_lobby_login(liqimsg)
+                    self._update_account_stats(liqimsg)
                 else:
                     LOGGER.warning("Lobby flow exists %s, ignoring new lobby flow %s", self.lobby_flow_id, msg.flow_id)
             
@@ -408,6 +442,33 @@ class BotManager:
             else:
                 LOGGER.debug('Other msg (ignored): %s', liqimsg)
                 
+    def _update_account_stats(self, liqimsg:dict):
+        """ parse account nickname + rank from oauth2Login and feed session stats"""
+        try:
+            acc = parse_account(liqimsg.get('data', {}))
+            if acc:
+                self.session_stats.update_account(
+                    acc.get('nickname'), acc.get('level_id'), acc.get('level_score'))
+        except Exception as e:  # pylint: disable=broad-except
+            LOGGER.debug("Dashboard: failed to parse account: %s", e)
+
+    def _record_game_stats(self, game_state:GameState):
+        """ derive placement/points from the end-game result and record to session stats"""
+        try:
+            if game_state.end_result_data is None:
+                return
+            mode = game_state.game_mode.value if game_state.game_mode else None
+            res = parse_end_result(game_state.end_result_data, game_state.seat)
+            if res:
+                scores = None
+                if res.get('scores'):
+                    scores = [res['scores'].get(i) for i in range(4)]
+                self.session_stats.record_game_result(
+                    res['placement'], mode, res.get('points'),
+                    game_state.seat, scores, res.get('grading'))
+        except Exception as e:  # pylint: disable=broad-except
+            LOGGER.error("Dashboard: failed to record game stats: %s", e, exc_info=True)
+
     def _process_idle_automation(self, liqimsg:dict):
         """ do some idle action based on liqi msg"""
         liqi_method = liqimsg['method']
@@ -422,6 +483,13 @@ class BotManager:
     def _process_end_game(self):
         # End game processes
         # self.game_flow_id = None
+        if self.game_state:
+            if self.st.enable_game_record:
+                save_mjai_record(
+                    self.game_state.mjai_msgs_recorded,
+                    self.game_state.seat,
+                    self.game_state.game_mode)
+            self._record_game_stats(self.game_state)
         self.game_state = None
         if self.browser:    # fix for corner case
             self.browser.overlay_clear_guidance()

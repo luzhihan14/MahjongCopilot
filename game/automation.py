@@ -795,15 +795,22 @@ class Automation:
         
     def _end_game_iter(self) -> Iterator[ActionStep]:
         # generate action steps for exiting a match until main menu tested
+        thres = self.st.main_menu_match_threshold
         while True:
-            res, diff = self.g_v.comp_temp(ImgTemp.MAIN_MENU)
+            res, diff = self.g_v.comp_temp(ImgTemp.MAIN_MENU, thres)
             if res:     # stop on main menu
                 LOGGER.debug("Visual sees main menu with diff %.1f", diff)
                 self.ui_state = UiState.MAIN_MENU
                 break
-            
+            # diagnostic: main menu NOT matched, so we are about to click GAMEOVER.
+            # If the menu is actually on screen, this diff reveals why it isn't matching
+            # (just above threshold -> raise main_menu_match_threshold; far above -> template is stale).
+            LOGGER.debug(
+                "End game: main-menu template NOT matched (diff=%.1f, threshold=%.0f), clicking GAMEOVER %s",
+                diff, thres, Positions.GAMEOVER[0])
+
             yield ActionStepDelay(random.uniform(2,3))
-            
+
             x,y = Positions.GAMEOVER[0]
             for step in self.steps_randomized_move_click(x,y):
                 yield step
@@ -822,13 +829,14 @@ class Automation:
     
     def _join_game_iter(self) -> Iterator[ActionStep]:
         # generate action steps for joining next game
-        
+        thres = self.st.main_menu_match_threshold
         while True:     # Wait for main menu
-            res, diff = self.g_v.comp_temp(ImgTemp.MAIN_MENU)
+            res, diff = self.g_v.comp_temp(ImgTemp.MAIN_MENU, thres)
             if res:
                 LOGGER.debug("Visual sees main menu with diff %.1f", diff)
                 self.ui_state = UiState.MAIN_MENU
                 break
+            LOGGER.debug("Join game: waiting for main menu (template diff=%.1f, threshold=%.0f)", diff, thres)
             yield ActionStepDelay(random.uniform(0.5, 1))
         
         # click on Ranked Mode

@@ -59,6 +59,7 @@ class GameState:
         if self.mjai_bot is None:
             raise ValueError("Bot is None")
         self.mjai_pending_input_msgs = []   # input msgs to be fed into bot
+        self.mjai_msgs_recorded:list = []   # full mjai event stream of the game, for optional game recording
         self.game_mode:GameMode = None      # Game mode
         
         ### Game info
@@ -82,7 +83,8 @@ class GameState:
         self.is_ms_syncing:bool = False         # if mjai_bot is running syncing from MS (after disconnection)
         self.is_round_started:bool = False
         """ if any new round has started (so game info is available)"""
-        self.is_game_ended:bool = False         # if game has ended    
+        self.is_game_ended:bool = False         # if game has ended
+        self.end_result_data:dict = None        # raw NotifyGameEndResult 'data' (for stats), or None
              
     def get_game_info(self) -> GameInfo:
         """ Return game info. Return None if N/A"""        
@@ -560,6 +562,7 @@ class GameState:
         
     def ms_end_kyoku(self) -> dict | None:
         """ End kyoku and get None as reaction"""
+        self.mjai_msgs_recorded.append({'type': MjaiType.END_KYOKU})
         self.mjai_pending_input_msgs = []
         # self.mjai_pending_input_msgs.append(
         #     {
@@ -573,15 +576,16 @@ class GameState:
     def ms_game_end_results(self, liqi_data:dict) -> dict:
         """ End game in normal way (getting results)"""
         if 'result' in liqi_data:
-            # process end result
-            pass
-        
+            # keep the raw result so the dashboard/stats can derive placement & points
+            self.end_result_data = liqi_data
+
         # self.mjai_pending_input_msgs.append(
         #     {
         #         'type': MJAI_TYPE.END_GAME
         #     }
         # )
         # self._react_all()
+        self.mjai_msgs_recorded.append({'type': MjaiType.END_GAME})
         self.is_game_ended = True
         return None     # no reaction for end_game
     
@@ -596,9 +600,12 @@ class GameState:
         returns:
             dict: the last reaction(output) from bot, or None
         """
-        if data: 
+        if data:
             if 'operation' not in data or 'operationList' not in data['operation'] or len(data['operation']['operationList']) == 0:
                 return None
+        # record the mjai event stream (copy before react, since react_batch mutates msgs with 'can_act')
+        for _msg in self.mjai_pending_input_msgs:
+            self.mjai_msgs_recorded.append(dict(_msg))
         try:
             if len(self.mjai_pending_input_msgs) == 1:
                 LOGGER.info("Bot in: %s", self.mjai_pending_input_msgs[0])
