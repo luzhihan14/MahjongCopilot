@@ -16,6 +16,8 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
 
+import sys
+
 from gui.main_gui import MainGUI
 from common import utils
 from common.log_helper import LogHelper
@@ -25,7 +27,9 @@ from bot_manager import BotManager
 
 def main():
     """ Main entry point """
-    LogHelper.config_logging()
+    # DEBUG logging is written only when launched with the -debug flag; otherwise INFO and above.
+    debug = '-debug' in sys.argv
+    LogHelper.config_logging(debug=debug)
     setting = Settings()
     # utils.set_dpi_awareness()
     utils.prevent_sleep()

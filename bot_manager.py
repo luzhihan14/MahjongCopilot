@@ -395,7 +395,11 @@ class BotManager:
             try:
                 liqimsg = self.liqi_parser.parse(msg.content)
             except Exception as e:
-                LOGGER.warning("Failed to parse liqi msg: %s\nError: %s", msg.content, e)
+                # single line; %r keeps the bytes on one line; the exception TYPE distinguishes a
+                # real missing-method failure from the old message-less keepalive noise
+                LOGGER.warning("Failed to parse liqi msg (%s): %r", type(e).__name__, msg.content)
+                return
+            if liqimsg is None:     # known keepalive / intentionally-skipped message
                 return
             liqi_id = liqimsg.get("id")
             liqi_type = liqimsg.get('type')

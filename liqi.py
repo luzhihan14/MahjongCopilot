@@ -58,6 +58,11 @@ class LiqiAction:
     MJStart = 'ActionMJStart' 
     
 
+# .lq services that are keepalive/handshake only and are NOT in the bundled liqi_proto/liqi.json.
+# Their REQ (.lq.Route.requestConnection / .lq.Route.heartbeat) and paired RES arrive constantly
+# and carry no actionable game data; parsing them would raise KeyError and flood the log.
+KEEPALIVE_SERVICES = {'Route'}
+
 keys = [0x84, 0x5e, 0x4e, 0x42, 0x39, 0xa2, 0x1f, 0x60, 0x1c]
 
 
@@ -83,12 +88,14 @@ class LiqiProto:
         self.msg_id = 1
         self.tot = 0
         self.res_type = dict()
+        self.no_proto_ids = set()   # REQ ids skipped as keepalive; their paired RES is skipped too
         jsonf = utils.sub_file('liqi_proto','liqi.json')
         self.jsonProto = json.load(open(jsonf, 'r', encoding='utf-8'))
 
     def init(self):
         self.msg_id = 1
         self.res_type.clear()
+        self.no_proto_ids.clear()
 
     def parse(self, flow_msg) -> dict:
         #parse一帧WS flow msg，要求按顺序parse
@@ -129,8 +136,13 @@ class LiqiProto:
                 assert(msg_id < 1 << 16)
                 assert(len(msg_block) == 2)
                 # assert(msg_id not in self.res_type)
-                method_name = msg_block[0]['data'].decode()                
+                method_name = msg_block[0]['data'].decode()
                 _, lq, service, rpc = method_name.split('.')
+                if service in KEEPALIVE_SERVICES:
+                    # known keepalive (e.g. .lq.Route.heartbeat), not in bundled proto:
+                    # skip quietly and remember the id so the paired RES is skipped too.
+                    self.no_proto_ids.add(msg_id)
+                    return None
                 proto_domain = self.jsonProto['nested'][lq]['nested'][service]['methods'][rpc]
                 liqi_pb2_req = getattr(pb, proto_domain['requestType'])
                 proto_obj = liqi_pb2_req.FromString(msg_block[1]['data'])
@@ -139,6 +151,13 @@ class LiqiProto:
                     pb, proto_domain['responseType']))
                 self.msg_id = msg_id
             elif msg_type == MsgType.RES:
+                # A RES is a keepalive response only if NO real REQ registered this id in res_type.
+                # This parser is shared across the lobby and game flows, whose independent msg_id
+                # counters can collide; gating on `not in res_type` guarantees a legitimate pending
+                # response is never dropped even if a stale keepalive id lingers.
+                if msg_id in self.no_proto_ids and msg_id not in self.res_type:
+                    self.no_proto_ids.discard(msg_id)
+                    return None
                 assert(len(msg_block[0]['data']) == 0)
                 assert(msg_id in self.res_type)
                 method_name, liqi_pb2_res = self.res_type.pop(msg_id)
