@@ -28,8 +28,9 @@ class MainGUI(tk.Tk):
         super().__init__()
         self.bot_manager = bot_manager
         self.st = setting
-        # auto-close / auto-loop state (driven from the GUI update loop):
-        self._pending_close_browser = False     # timer expired; close browser once the game is over
+        # auto-join session / auto-close / auto-loop state (driven from the GUI update loop):
+        self._session_end_at = None              # timestamp the auto-join session countdown ends
+        self._pending_close_browser = False     # session ended; close browser once the game is over
         self._game_over_since = None             # when is_in_game first went False (debounce)
         self._auto_loop_await_close = False      # waiting for the browser thread to fully stop
         self._auto_loop_relaunch_at = None       # timestamp to relaunch the browser (auto-loop)
@@ -40,7 +41,7 @@ class MainGUI(tk.Tk):
         icon = tk.PhotoImage(file=sub_file(Folder.RES,'icon.png'))
         self.iconphoto(True, icon)
         self.protocol("WM_DELETE_WINDOW", self._on_exit)        # confirmation before close window  
-        size = (620,540)      
+        size = (620,660)
         self.geometry(f"{size[0]}x{size[1]}")
         self.minsize(*size)
         # Styling
@@ -113,49 +114,29 @@ class MainGUI(tk.Tk):
         self.switch_record = ToggleSwitch(
             self.tb2, self.st.lan().GAME_RECORD, tb_ht, font_size=sw_ft_sz, command=self._on_switch_record_clicked)
         self.switch_record.pack(**pack_args)
-        # auto join
+        # auto join level and mode (which game to queue for)
         self.tb2.add_sep()
-        self.switch_autojoin = ToggleSwitch(
-            self.tb2, self.st.lan().AUTO_JOIN_GAME, tb_ht, font_size=sw_ft_sz, command=self._on_switch_autojoin_clicked)
-        self.switch_autojoin.pack(**pack_args)
-        # combo boxrd for auto join level and mode
         _frame = tk.Frame(self.tb2)
         _frame.pack(**pack_args)
         self.auto_join_level_var = tk.StringVar(value=self.st.lan().GAME_LEVELS[self.st.auto_join_level])
         options = self.st.lan().GAME_LEVELS
         combo_autojoin_level = ttk.Combobox(_frame, textvariable=self.auto_join_level_var, values=options, state="readonly", width=8)
-        combo_autojoin_level.grid(row=0, column=0, padx=3, pady=3)   
-        combo_autojoin_level.bind("<<ComboboxSelected>>", self._on_autojoin_level_selected)        
+        combo_autojoin_level.grid(row=0, column=0, padx=3, pady=3)
+        combo_autojoin_level.bind("<<ComboboxSelected>>", self._on_autojoin_level_selected)
         mode_idx = GAME_MODES.index(self.st.auto_join_mode)
         self.auto_join_mode_var = tk.StringVar(value=self.st.lan().GAME_MODES[mode_idx])
         options = self.st.lan().GAME_MODES
         combo_autojoin_mode = ttk.Combobox(_frame, textvariable=self.auto_join_mode_var, values=options, state="readonly", width=8)
         combo_autojoin_mode.grid(row=1, column=0, padx=3, pady=3)
         combo_autojoin_mode.bind("<<ComboboxSelected>>", self._on_autojoin_mode_selected)
-        # timer
-        self.timer = Timer(self.tb2, tb_ht, sw_ft_sz, self.st.lan().AUTO_JOIN_TIMER)
-        self.timer.set_callback(self._on_autojoin_timer_up)   # on time up: stop autojoin + close browser after game
-        self.timer.pack(**pack_args)
         self.tb2.add_sep()
-        # auto loop: after the timer ends and the game is over, relaunch the browser and restart
-        # auto-join after an interval (minutes)
-        self.switch_autoloop = ToggleSwitch(
-            self.tb2, self.st.lan().AUTO_LOOP, tb_ht, font_size=sw_ft_sz, command=self._on_switch_autoloop_clicked)
-        self.switch_autoloop.pack(**pack_args)
-        _loop_frame = tk.Frame(self.tb2)
-        _loop_frame.pack(**pack_args)
-        _loop_lbl = tk.Label(_loop_frame, text=self.st.lan().AUTO_LOOP_INTERVAL, font=GUI_STYLE.font_normal(size=sw_ft_sz))
-        _loop_lbl.grid(row=0, column=0, padx=1, pady=1)
-        add_hover_text(_loop_lbl, self.st.lan().AUTO_LOOP_TIP)
-        self.auto_loop_interval_var = tk.StringVar(value=f"{self.st.auto_loop_interval:g}")
-        _loop_entry = tk.Entry(
-            _loop_frame, textvariable=self.auto_loop_interval_var, width=5, justify=tk.CENTER,
-            font=GUI_STYLE.font_normal(size=sw_ft_sz))
-        _loop_entry.grid(row=1, column=0, padx=1, pady=1)
-        _loop_entry.bind("<FocusOut>", self._on_auto_loop_interval_changed)
-        _loop_entry.bind("<Return>", self._on_auto_loop_interval_changed)
-        self.tb2.add_sep()
-               
+
+        # === Auto Join / Auto Loop panel (row below the 2nd toolbar) ===
+        cur_row += 1
+        auto_panel = self._build_auto_panel()
+        auto_panel.grid(row=cur_row, column=0, sticky='w', padx=5, pady=2)
+        self.grid_frame.grid_rowconfigure(cur_row, weight=0)
+
         # === AI guidance ===
         cur_row += 1
         _label = ttk.Label(self.grid_frame, text=self.st.lan().AI_OUTPUT)
@@ -254,14 +235,17 @@ class MainGUI(tk.Tk):
         self.switch_autojoin.switch_mid()
         if self.st.auto_join_game:
             self.bot_manager.disable_autojoin()
+            self._cancel_session()      # manually turning auto-join off ends the managed session
         else:
             self.bot_manager.enable_autojoin()
 
-    def _on_autojoin_timer_up(self):
-        """ auto-join timer expired: stop auto-join, then close the browser once the game is over """
-        LOGGER.info("Auto-join timer up: stopping auto-join; browser will close after the game ends")
-        self.bot_manager.disable_autojoin()
-        self._pending_close_browser = True
+    def _cancel_session(self):
+        """ clear all managed auto-join session / auto-loop countdown state """
+        self._session_end_at = None
+        self._pending_close_browser = False
+        self._game_over_since = None
+        self._auto_loop_await_close = False
+        self._auto_loop_relaunch_at = None
 
     def _on_switch_autoloop_clicked(self):
         self.switch_autoloop.switch_mid()
@@ -270,43 +254,83 @@ class MainGUI(tk.Tk):
         if not self.st.enable_auto_loop:
             self._auto_loop_relaunch_at = None      # cancel any pending relaunch
 
-    def _on_auto_loop_interval_changed(self, _event=None):
-        try:
-            val = float(self.auto_loop_interval_var.get())
-            if 0 < val <= 1440:
-                self.st.auto_loop_interval = val
-                self.st.save_json()
-        except ValueError:
-            pass
-        self.auto_loop_interval_var.set(f"{self.st.auto_loop_interval:g}")   # normalize/revert display
+    def _read_auto_inputs(self, _event=None):
+        """ parse the Session / Interval minute entries into settings (in-memory), reverting bad input """
+        for var, attr in ((self.session_min_var, 'auto_join_timer'),
+                          (self.auto_loop_interval_var, 'auto_loop_interval')):
+            try:
+                val = float(var.get())
+                if 0 < val <= 1440:
+                    setattr(self.st, attr, val)
+            except ValueError:
+                pass
+            var.set(f"{getattr(self.st, attr):g}")   # normalize / revert display
+
+    def _on_auto_save_click(self):
+        """ Save button: persist the Session / Interval minutes to settings.json """
+        self._read_auto_inputs()
+        self.st.save_json()
+        LOGGER.info("Saved auto-join session=%g min, loop interval=%g min",
+                    self.st.auto_join_timer, self.st.auto_loop_interval)
+
+    def _on_auto_start_stop(self):
+        """ Start: enable auto-join, open the browser if needed, begin the session countdown.
+        Stop: end the session (disable auto-join, clear all countdowns / pending states). """
+        if self._is_session_active():
+            LOGGER.info("Auto-join session stopped by user")
+            self.bot_manager.disable_autojoin()
+            self._cancel_session()
+        else:
+            self._read_auto_inputs()
+            LOGGER.info("Auto-join session started: %g min, auto-loop=%s",
+                        self.st.auto_join_timer, self.st.enable_auto_loop)
+            if not self.bot_manager.browser.is_running():
+                self.bot_manager.start_browser()
+            self.bot_manager.enable_autojoin()
+            self._session_end_at = time.time() + self.st.auto_join_timer * 60
+
+    def _is_session_active(self) -> bool:
+        """ True while a managed auto-join session is running (Start clicked, not yet fully ended). """
+        return (self._session_end_at is not None or self._pending_close_browser
+                or self._auto_loop_await_close or self._auto_loop_relaunch_at is not None)
+
+    @staticmethod
+    def _fmt_mmss(seconds:float) -> str:
+        s = max(0, int(seconds))
+        return f"{s // 60:02d}:{s % 60:02d}"
 
     # grace period the game must stay "over" before auto-close fires, so a transient
     # game_state gap (matchmaking/loading/brief disconnect) doesn't close the browser mid-session
     _AUTO_CLOSE_GRACE_SEC = 8.0
 
     def _update_auto_loop(self):
-        """ Drive the auto-close / auto-loop state machine (called each GUI update tick):
-        1) once the auto-join timer expired and the game has stayed over for a grace period, close
-           the browser (revoked if the user re-enables auto-join);
-        2) if Auto Loop is on, wait for the browser to fully stop, then after the interval relaunch
-           it, re-enable auto-join, and restart the timer. """
+        """ Drive the session / auto-close / auto-loop state machine (called each GUI update tick). """
         bm = self.bot_manager
         now = time.time()
-        # 1) close the browser after the timer expired and the game has been over for the grace period
+        # 0) session timer expired -> stop auto-join, then close the browser once the game is over
+        if self._session_end_at is not None and now >= self._session_end_at:
+            LOGGER.info("Auto-join session timer up; stopping auto-join")
+            self._session_end_at = None
+            bm.disable_autojoin()
+            self._pending_close_browser = True
+        # 1) close the browser after the game has stayed over for the grace period
         if self._pending_close_browser:
             if self.st.auto_join_game:                      # user re-enabled auto-join -> keep playing
                 self._pending_close_browser = False
                 self._game_over_since = None
             elif not bm.browser.is_running():
-                self._pending_close_browser = False         # nothing to close
+                # browser already gone (closed/crashed) -> nothing to close, but still loop if enabled
+                self._pending_close_browser = False
                 self._game_over_since = None
+                if self.st.enable_auto_loop:
+                    self._auto_loop_await_close = True
             elif bm.is_in_game():
                 self._game_over_since = None                # still in a game; keep waiting
             else:                                           # not in a game -> debounce transient gaps
                 if self._game_over_since is None:
                     self._game_over_since = now
                 elif now - self._game_over_since >= self._AUTO_CLOSE_GRACE_SEC:
-                    LOGGER.info("Auto-close: timer up and game over, closing browser")
+                    LOGGER.info("Auto-close: session over, closing browser")
                     bm.close_browser()
                     self._pending_close_browser = False
                     self._game_over_since = None
@@ -320,7 +344,7 @@ class MainGUI(tk.Tk):
                 self._auto_loop_await_close = False
                 self._auto_loop_relaunch_at = now + self.st.auto_loop_interval * 60
                 LOGGER.info("Auto-loop: browser will relaunch in %g min", self.st.auto_loop_interval)
-        # 3) wait the interval, then relaunch (cancel if loop turned off or the user reopened it)
+        # 3) after the interval, relaunch and restart the session (cancel if loop off / user reopened)
         elif self._auto_loop_relaunch_at is not None:
             if not self.st.enable_auto_loop or bm.browser.is_running():
                 self._auto_loop_relaunch_at = None
@@ -329,7 +353,72 @@ class MainGUI(tk.Tk):
                 self._auto_loop_relaunch_at = None
                 bm.start_browser()
                 bm.enable_autojoin()
-                self.timer.restart_saved()
+                self._session_end_at = now + self.st.auto_join_timer * 60
+
+    def _update_auto_ui(self):
+        """ Refresh the panel's countdowns, status line, and Start/Stop button text each tick. """
+        now = time.time()
+        lan = self.st.lan()
+        self.session_cd_var.set(self._fmt_mmss(self._session_end_at - now)
+                                if self._session_end_at is not None else "--:--")
+        self.loop_cd_var.set(self._fmt_mmss(self._auto_loop_relaunch_at - now)
+                             if self._auto_loop_relaunch_at is not None else "--:--")
+        if self._session_end_at is not None:
+            status = f"{lan.AUTO_STATUS_PLAYING} {self._fmt_mmss(self._session_end_at - now)}"
+        elif self._pending_close_browser or self._auto_loop_await_close:
+            status = lan.AUTO_STATUS_ENDING
+        elif self._auto_loop_relaunch_at is not None:
+            status = f"{lan.AUTO_STATUS_LOOPING} {self._fmt_mmss(self._auto_loop_relaunch_at - now)}"
+        else:
+            status = lan.AUTO_STATUS_IDLE
+        self.auto_status_var.set(status)
+        self.btn_auto_start.config(text=lan.STOP if self._is_session_active() else lan.START)
+
+    def _build_auto_panel(self) -> tk.Frame:
+        """ Build the Auto Join / Auto Loop panel: a status line, two stacked toggles each with a
+        minutes input and a live countdown, and Save + Start/Stop buttons. """
+        ft = 9
+        fnt = GUI_STYLE.font_normal(size=ft)
+        panel = tk.Frame(self.grid_frame, relief=tk.GROOVE, borderwidth=2)
+        # row 0: status line (spans the panel)
+        self.auto_status_var = tk.StringVar(value=self.st.lan().AUTO_STATUS_IDLE)
+        tk.Label(panel, textvariable=self.auto_status_var, font=GUI_STYLE.font_normal(size=ft+1),
+                 anchor='w').grid(row=0, column=0, columnspan=4, sticky='ew', padx=5, pady=(2, 1))
+        # row 1: Auto Join toggle | Session (min) | entry | countdown
+        self.switch_autojoin = ToggleSwitch(panel, self.st.lan().AUTO_JOIN_GAME, 56, font_size=ft,
+                                            command=self._on_switch_autojoin_clicked)
+        self.switch_autojoin.grid(row=1, column=0, padx=4, pady=1)
+        tk.Label(panel, text=self.st.lan().SESSION_MIN, font=fnt).grid(row=1, column=1, sticky='e', padx=(6, 2))
+        self.session_min_var = tk.StringVar(value=f"{self.st.auto_join_timer:g}")
+        _e1 = tk.Entry(panel, textvariable=self.session_min_var, width=5, justify=tk.CENTER, font=fnt)
+        _e1.grid(row=1, column=2, padx=2)
+        _e1.bind("<FocusOut>", self._read_auto_inputs)
+        _e1.bind("<Return>", self._read_auto_inputs)
+        self.session_cd_var = tk.StringVar(value="--:--")
+        tk.Label(panel, textvariable=self.session_cd_var, width=9, anchor='w', font=fnt
+                 ).grid(row=1, column=3, sticky='w', padx=(4, 6))
+        # row 2: Auto Loop toggle | Interval (min) | entry | countdown
+        self.switch_autoloop = ToggleSwitch(panel, self.st.lan().AUTO_LOOP, 56, font_size=ft,
+                                            command=self._on_switch_autoloop_clicked)
+        self.switch_autoloop.grid(row=2, column=0, padx=4, pady=1)
+        _il = tk.Label(panel, text=self.st.lan().AUTO_LOOP_INTERVAL, font=fnt)
+        _il.grid(row=2, column=1, sticky='e', padx=(6, 2))
+        add_hover_text(_il, self.st.lan().AUTO_LOOP_TIP)
+        self.auto_loop_interval_var = tk.StringVar(value=f"{self.st.auto_loop_interval:g}")
+        _e2 = tk.Entry(panel, textvariable=self.auto_loop_interval_var, width=5, justify=tk.CENTER, font=fnt)
+        _e2.grid(row=2, column=2, padx=2)
+        _e2.bind("<FocusOut>", self._read_auto_inputs)
+        _e2.bind("<Return>", self._read_auto_inputs)
+        self.loop_cd_var = tk.StringVar(value="--:--")
+        tk.Label(panel, textvariable=self.loop_cd_var, width=9, anchor='w', font=fnt
+                 ).grid(row=2, column=3, sticky='w', padx=(4, 6))
+        # row 3: Save | Start/Stop
+        tk.Button(panel, text=self.st.lan().SAVE, command=self._on_auto_save_click, font=fnt, width=8
+                  ).grid(row=3, column=0, columnspan=2, sticky='ew', padx=4, pady=(1, 3))
+        self.btn_auto_start = tk.Button(panel, text=self.st.lan().START, command=self._on_auto_start_stop,
+                                        font=fnt, width=8)
+        self.btn_auto_start.grid(row=3, column=2, columnspan=2, sticky='ew', padx=4, pady=(1, 3))
+        return panel
             
 
     def _on_btn_log_clicked(self):
@@ -429,8 +518,9 @@ class MainGUI(tk.Tk):
             else:
                 sw.switch_off()
 
-        # drive the auto-close / auto-loop state machine
+        # drive the session / auto-close / auto-loop state machine, then refresh its UI
         self._update_auto_loop()
+        self._update_auto_ui()
 
         # Update AI guide from Reaction
         pending_reaction = self.bot_manager.get_pending_reaction()

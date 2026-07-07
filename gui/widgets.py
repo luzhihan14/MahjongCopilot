@@ -101,7 +101,6 @@ class Timer(tk.Frame):
         self.timer_running:bool = False
         self.timer_id = None
         self.stop_time:float = None
-        self.set_seconds:int = 0        # last user-set duration in seconds (for auto-loop restart)
 
         # Variables for time
         self.hour_var = tk.StringVar(value="01")
@@ -132,18 +131,6 @@ class Timer(tk.Frame):
     def set_callback(self, callback:Callable):
         """ Set callback function to be called when timer is stopped"""
         self.callback = callback
-
-    def restart_saved(self) -> bool:
-        """ Restart the countdown using the last user-set duration (for auto-loop).
-        Returns False if already running or no prior duration was set. """
-        if self.timer_running or self.set_seconds <= 0:
-            return False
-        s = self.set_seconds
-        self.hour_var.set(f"{s // 3600:02}")
-        self.minute_var.set(f"{(s % 3600) // 60:02}")
-        self.second_var.set(f"{s % 60:02}")
-        self._start_timer()
-        return True
 
 
     
@@ -187,8 +174,7 @@ class Timer(tk.Frame):
         minutes = int(self.minute_var.get())
         seconds = int(self.second_var.get())
         LOGGER.info("Timer set %d:%d:%d", hours, minutes, seconds)
-        self.set_seconds = hours * 3600 + minutes * 60 + seconds    # remember for auto-loop restart
-        self.stop_time = time.time() + self.set_seconds
+        self.stop_time = time.time() + hours * 3600 + minutes * 60 + seconds
         for e in self.entries:
             e.configure(state=tk.DISABLED)
         add_hover_text(self.the_btn, Timer.STOP)

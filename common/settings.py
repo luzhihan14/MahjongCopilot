@@ -80,8 +80,11 @@ class Settings:
         self.auto_join_game:bool = self._get_value("auto_join_game", False, self.valid_bool)
         self.auto_join_level:int = self._get_value("auto_join_level", 1, self.valid_game_level)
         self.auto_join_mode:int = self._get_value("auto_join_mode", utils.GAME_MODES[0], self.valid_game_mode)
-        # Auto loop: after the auto-join timer ends and the game finishes, the browser is closed;
-        # if enabled, relaunch the browser and restart auto-join after this many minutes.
+        # Auto-join session length in minutes: when the Start countdown ends, auto-join stops and
+        # the browser closes once the game is over.
+        self.auto_join_timer:float = self._get_value("auto_join_timer", 60.0, lambda x: 0 < x <= 1440)
+        # Auto loop: after the session ends and the game finishes, if enabled, relaunch the browser
+        # and restart auto-join after this many minutes.
         self.enable_auto_loop:bool = self._get_value("enable_auto_loop", False, self.valid_bool)
         self.auto_loop_interval:float = self._get_value("auto_loop_interval", 5.0, lambda x: 0 < x <= 1440)
 
