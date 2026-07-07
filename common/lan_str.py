@@ -12,6 +12,11 @@ class LanStr:
     GAME_RECORD = "Record"
     AUTO_JOIN_GAME = "Auto Join"
     AUTO_JOIN_TIMER = "Auto Join Timer"
+    AUTO_LOOP = "Auto Loop"
+    AUTO_LOOP_INTERVAL = "Loop Interval (min)"
+    AUTO_LOOP_TIP = ("When the Auto Join timer ends and the game finishes, the browser is closed. "
+                     "With Auto Loop on, the browser relaunches and auto-join restarts after the "
+                     "interval (minutes) below, with the timer reset to its previous duration.")
     OPEN_LOG_FILE = "Open Log File"
     SETTINGS = "Settings"
     HELP = "Help"
@@ -152,6 +157,10 @@ class LanStrZHS(LanStr):
     GAME_RECORD = "录制牌谱"
     AUTO_JOIN_GAME = "自动加入"
     AUTO_JOIN_TIMER = "自动加入定时停止"
+    AUTO_LOOP = "自动循环"
+    AUTO_LOOP_INTERVAL = "循环间隔(分)"
+    AUTO_LOOP_TIP = ("自动加入定时结束且本局游戏结束后，浏览器会关闭。开启自动循环后，"
+                     "将在下方设置的间隔(分钟)后重新打开浏览器并重启自动加入，定时器会重置为之前的时长。")
     OPEN_LOG_FILE = "打开日志文件"
     SETTINGS = "设置"
     HELP = "帮助"

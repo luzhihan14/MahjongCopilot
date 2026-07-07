@@ -5,6 +5,7 @@ GUI functions: controlling browser settings, displaying AI guidance info, game s
 """
 
 import os
+import time
 import tkinter as tk
 from tkinter import ttk, messagebox
 
@@ -15,7 +16,7 @@ from common.log_helper import LOGGER, LogHelper
 from common.settings import Settings
 from common.mj_helper import GameInfo, MJAI_TILE_2_UNICODE
 from updater import Updater, UpdateStatus
-from .utils import GUI_STYLE
+from .utils import GUI_STYLE, add_hover_text
 from .settings_window import SettingsWindow
 from .help_window import HelpWindow
 from .widgets import *  # pylint: disable=wildcard-import, unused-wildcard-import
@@ -27,6 +28,11 @@ class MainGUI(tk.Tk):
         super().__init__()
         self.bot_manager = bot_manager
         self.st = setting
+        # auto-close / auto-loop state (driven from the GUI update loop):
+        self._pending_close_browser = False     # timer expired; close browser once the game is over
+        self._game_over_since = None             # when is_in_game first went False (debounce)
+        self._auto_loop_await_close = False      # waiting for the browser thread to fully stop
+        self._auto_loop_relaunch_at = None       # timestamp to relaunch the browser (auto-loop)
         self.updater = Updater(self.st.update_url)
         self.after_idle(self.updater.load_help)
         self.after_idle(self.updater.check_update)        # check update when idle
@@ -128,9 +134,27 @@ class MainGUI(tk.Tk):
         combo_autojoin_mode.bind("<<ComboboxSelected>>", self._on_autojoin_mode_selected)
         # timer
         self.timer = Timer(self.tb2, tb_ht, sw_ft_sz, self.st.lan().AUTO_JOIN_TIMER)
-        self.timer.set_callback(self.bot_manager.disable_autojoin)        # stop autojoin when time is up
+        self.timer.set_callback(self._on_autojoin_timer_up)   # on time up: stop autojoin + close browser after game
         self.timer.pack(**pack_args)
-        self.tb2.add_sep()        
+        self.tb2.add_sep()
+        # auto loop: after the timer ends and the game is over, relaunch the browser and restart
+        # auto-join after an interval (minutes)
+        self.switch_autoloop = ToggleSwitch(
+            self.tb2, self.st.lan().AUTO_LOOP, tb_ht, font_size=sw_ft_sz, command=self._on_switch_autoloop_clicked)
+        self.switch_autoloop.pack(**pack_args)
+        _loop_frame = tk.Frame(self.tb2)
+        _loop_frame.pack(**pack_args)
+        _loop_lbl = tk.Label(_loop_frame, text=self.st.lan().AUTO_LOOP_INTERVAL, font=GUI_STYLE.font_normal(size=sw_ft_sz))
+        _loop_lbl.grid(row=0, column=0, padx=1, pady=1)
+        add_hover_text(_loop_lbl, self.st.lan().AUTO_LOOP_TIP)
+        self.auto_loop_interval_var = tk.StringVar(value=f"{self.st.auto_loop_interval:g}")
+        _loop_entry = tk.Entry(
+            _loop_frame, textvariable=self.auto_loop_interval_var, width=5, justify=tk.CENTER,
+            font=GUI_STYLE.font_normal(size=sw_ft_sz))
+        _loop_entry.grid(row=1, column=0, padx=1, pady=1)
+        _loop_entry.bind("<FocusOut>", self._on_auto_loop_interval_changed)
+        _loop_entry.bind("<Return>", self._on_auto_loop_interval_changed)
+        self.tb2.add_sep()
                
         # === AI guidance ===
         cur_row += 1
@@ -232,6 +256,80 @@ class MainGUI(tk.Tk):
             self.bot_manager.disable_autojoin()
         else:
             self.bot_manager.enable_autojoin()
+
+    def _on_autojoin_timer_up(self):
+        """ auto-join timer expired: stop auto-join, then close the browser once the game is over """
+        LOGGER.info("Auto-join timer up: stopping auto-join; browser will close after the game ends")
+        self.bot_manager.disable_autojoin()
+        self._pending_close_browser = True
+
+    def _on_switch_autoloop_clicked(self):
+        self.switch_autoloop.switch_mid()
+        self.st.enable_auto_loop = not self.st.enable_auto_loop
+        self.st.save_json()
+        if not self.st.enable_auto_loop:
+            self._auto_loop_relaunch_at = None      # cancel any pending relaunch
+
+    def _on_auto_loop_interval_changed(self, _event=None):
+        try:
+            val = float(self.auto_loop_interval_var.get())
+            if 0 < val <= 1440:
+                self.st.auto_loop_interval = val
+                self.st.save_json()
+        except ValueError:
+            pass
+        self.auto_loop_interval_var.set(f"{self.st.auto_loop_interval:g}")   # normalize/revert display
+
+    # grace period the game must stay "over" before auto-close fires, so a transient
+    # game_state gap (matchmaking/loading/brief disconnect) doesn't close the browser mid-session
+    _AUTO_CLOSE_GRACE_SEC = 8.0
+
+    def _update_auto_loop(self):
+        """ Drive the auto-close / auto-loop state machine (called each GUI update tick):
+        1) once the auto-join timer expired and the game has stayed over for a grace period, close
+           the browser (revoked if the user re-enables auto-join);
+        2) if Auto Loop is on, wait for the browser to fully stop, then after the interval relaunch
+           it, re-enable auto-join, and restart the timer. """
+        bm = self.bot_manager
+        now = time.time()
+        # 1) close the browser after the timer expired and the game has been over for the grace period
+        if self._pending_close_browser:
+            if self.st.auto_join_game:                      # user re-enabled auto-join -> keep playing
+                self._pending_close_browser = False
+                self._game_over_since = None
+            elif not bm.browser.is_running():
+                self._pending_close_browser = False         # nothing to close
+                self._game_over_since = None
+            elif bm.is_in_game():
+                self._game_over_since = None                # still in a game; keep waiting
+            else:                                           # not in a game -> debounce transient gaps
+                if self._game_over_since is None:
+                    self._game_over_since = now
+                elif now - self._game_over_since >= self._AUTO_CLOSE_GRACE_SEC:
+                    LOGGER.info("Auto-close: timer up and game over, closing browser")
+                    bm.close_browser()
+                    self._pending_close_browser = False
+                    self._game_over_since = None
+                    if self.st.enable_auto_loop:
+                        self._auto_loop_await_close = True
+        # 2) after closing, wait for the old browser thread to fully stop, then start the interval
+        elif self._auto_loop_await_close:
+            if not self.st.enable_auto_loop:
+                self._auto_loop_await_close = False
+            elif not bm.browser.is_running():               # old browser fully stopped
+                self._auto_loop_await_close = False
+                self._auto_loop_relaunch_at = now + self.st.auto_loop_interval * 60
+                LOGGER.info("Auto-loop: browser will relaunch in %g min", self.st.auto_loop_interval)
+        # 3) wait the interval, then relaunch (cancel if loop turned off or the user reopened it)
+        elif self._auto_loop_relaunch_at is not None:
+            if not self.st.enable_auto_loop or bm.browser.is_running():
+                self._auto_loop_relaunch_at = None
+            elif now >= self._auto_loop_relaunch_at:
+                LOGGER.info("Auto-loop: relaunching browser and restarting auto-join")
+                self._auto_loop_relaunch_at = None
+                bm.start_browser()
+                bm.enable_autojoin()
+                self.timer.restart_saved()
             
 
     def _on_btn_log_clicked(self):
@@ -322,13 +420,17 @@ class MainGUI(tk.Tk):
             (self.switch_overlay, lambda: self.st.enable_overlay),
             (self.switch_autoplay, lambda: self.st.enable_automation),
             (self.switch_record, lambda: self.st.enable_game_record),
-            (self.switch_autojoin, lambda: self.st.auto_join_game)
+            (self.switch_autojoin, lambda: self.st.auto_join_game),
+            (self.switch_autoloop, lambda: self.st.enable_auto_loop)
         ]
         for sw, func in sw_list:
             if func():
                 sw.switch_on()
             else:
                 sw.switch_off()
+
+        # drive the auto-close / auto-loop state machine
+        self._update_auto_loop()
 
         # Update AI guide from Reaction
         pending_reaction = self.bot_manager.get_pending_reaction()

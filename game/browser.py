@@ -194,7 +194,10 @@ class GameBrowser:
             self._stop_event.set()
             if join_thread:
                 self._browser_thread.join()
-            self._browser_thread = None
+                self._browser_thread = None
+            # non-join: keep the thread ref so is_running() reports is_alive() until the thread
+            # actually exits (it still has to close the Playwright context, which can take seconds).
+            # Nulling it here would make is_running() lie and let a relaunch orphan the new browser.
 
     def is_running(self):
         """ return True if browser thread is still running"""

@@ -156,6 +156,12 @@ class BotManager:
         ms_url = self.st.ms_url
         proxy = self.mitm_server.proxy_str
         self.browser.start(ms_url, proxy, self.st.browser_width, self.st.browser_height, self.st.enable_chrome_ext)
+
+    def close_browser(self):
+        """ Close the browser window (non-blocking). Used by the GUI auto-close / auto-loop. """
+        if self.browser and self.browser.is_running():
+            LOGGER.info("Closing browser")
+            self.browser.stop(False)
     
     def is_browser_zoom_off(self):
         """ check browser zoom level, return true if zoomlevel is not 1"""
