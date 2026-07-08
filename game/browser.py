@@ -7,10 +7,15 @@ import os
 
 from io import BytesIO
 from playwright._impl._errors import TargetClosedError
-from playwright.sync_api import sync_playwright, BrowserContext, Page
+from playwright.sync_api import sync_playwright, BrowserContext, Page, TimeoutError as PlaywrightTimeoutError
 from common import utils
 from common.utils import Folder, FPSCounter, list_children
 from common.log_helper import LOGGER
+
+# Screenshot timeout. A fresh page (e.g. right after an auto-loop relaunch) is still loading the
+# heavy Majsoul WebGL canvas, so give the screenshot generous time to succeed instead of failing
+# fast; a ready page returns in well under a second, so this only extends the wait during loading.
+SCREENSHOT_TIMEOUT_MS = 15000
 
 class GameBrowser:
     """ Wrapper for Playwright browser controlling maj-soul operations
@@ -306,11 +311,13 @@ class GameBrowser:
         res_queue = queue.Queue()
         try:
             self._action_queue.put(lambda: self._action_screen_shot(res_queue))
-            res:BytesIO = res_queue.get(True,5)
+            # wait a bit longer than the screenshot's own timeout so the browser thread's result
+            # (or its None on timeout) is received rather than abandoned early while it's still busy
+            res:BytesIO = res_queue.get(True, SCREENSHOT_TIMEOUT_MS / 1000 + 2)
         except queue.Empty:
             return None
-        except Exception as e:
-            LOGGER.error("Error taking screenshot: %s", e, exc_info=True)
+        except Exception as e:  # pylint: disable=broad-except
+            LOGGER.warning("Error requesting screenshot: %s", e)
             return None
 
         if res is None:
@@ -535,7 +542,7 @@ class GameBrowser:
             pass
 
 
-    def _action_screen_shot(self, res_queue:queue.Queue, time_ms:int=5000):
+    def _action_screen_shot(self, res_queue:queue.Queue, time_ms:int=SCREENSHOT_TIMEOUT_MS):
         """ take screen shot from browser page
         Params:
             res_queue: queue for saving the image buff data"""
@@ -543,8 +550,13 @@ class GameBrowser:
             try:
                 ss_bytes:BytesIO = self.page.screenshot(timeout=time_ms)
                 res_queue.put(ss_bytes)
-            except Exception as e:
-                LOGGER.error("Error taking screenshot: %s", e, exc_info=True)
+            except PlaywrightTimeoutError:
+                # expected while the page is still loading (e.g. right after an auto-loop relaunch);
+                # the caller just retries, so keep this quiet (visible only with -debug)
+                LOGGER.debug("Screenshot timed out after %dms (page busy/still loading)", time_ms)
+                res_queue.put(None)
+            except Exception as e:  # pylint: disable=broad-except
+                LOGGER.warning("Error taking screenshot: %s", e)
                 res_queue.put(None)
         else:
             res_queue.put(None)
