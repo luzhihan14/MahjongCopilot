@@ -7,11 +7,12 @@ popup windows (used by auto-join to dismiss popups blocking the main menu).
 
 ```
 training_data/popups/
-├── raw/          <- DROP YOUR SNAPSHOTS HERE: full-screen shots of popups
-│                    (gitignored: may contain account name/rank)
+├── raw/          <- DROP YOUR SNAPSHOTS HERE: full-screen shots of popups.
+│                    Committed to git — mask anything sensitive (account name
+│                    etc.) BEFORE dropping files in
 ├── negatives/    <- full-screen shots WITHOUT any popup (plain main menu,
-│                    shop open, in-game, ...) — background / hard negatives
-│                    (gitignored, same reason)
+│                    matchmaking queue, in-game, ...) — background / hard
+│                    negatives. Also committed; same masking rule
 └── icons/        <- cropped icon patches, one folder per class (tracked in git)
     ├── close_x/        the ✕ button on popups (red diamond, plain gray, ...)
     ├── return_arrow/   the curved return/back arrow (all colorways)

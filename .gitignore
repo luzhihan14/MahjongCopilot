@@ -28,10 +28,3 @@ MahjongCopilot.spec
 libriichi3p/*.pyd
 libriichi3p/*.so
 chrome_ext/
-
-# popup-detector training snapshots (full screenshots may contain account info);
-# cropped icons in training_data/popups/icons/ stay tracked
-training_data/popups/raw/*
-training_data/popups/negatives/*
-!training_data/popups/raw/.gitkeep
-!training_data/popups/negatives/.gitkeep
