@@ -268,6 +268,13 @@ class GameBrowser:
         """ Queue action: Autohu action"""
         self._action_queue.put(self._action_autohu)
 
+    def reload(self, blocking:bool=False):
+        """ Queue action: reload the game page (last-resort escape from a stuck lobby state)"""
+        finish_event = threading.Event()
+        self._action_queue.put(lambda: self._action_reload(finish_event))
+        if blocking:
+            finish_event.wait()
+
     def start_overlay(self):
         """ Queue action: Start showing the overlay"""
         self._last_botleft_text = None
@@ -355,6 +362,14 @@ class GameBrowser:
     def _action_autohu(self):
         """ call autohu function in page"""
         self.page.evaluate("() => view.DesktopMgr.Inst.setAutoHule(true)")
+
+    def _action_reload(self, finish_event:threading.Event):
+        """ reload the page. Blocks the browser action thread until load (or 30s timeout)"""
+        try:
+            self.page.reload()
+        except Exception as e:      # pylint: disable=broad-except
+            LOGGER.warning("Error reloading page: %s", e)
+        finish_event.set()
 
     def _action_start_overlay(self):
         """ Display overlay on page. Will ignore if already exist, or page is None"""

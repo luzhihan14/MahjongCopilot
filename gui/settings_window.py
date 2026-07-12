@@ -260,7 +260,19 @@ class SettingsWindow(tk.Toplevel):
         self.delay_random_upper_var = tk.DoubleVar(value=self.st.delay_random_upper)
         delay_upper_entry = tk.Entry(main_frame, textvariable= self.delay_random_upper_var,width=std_wid)
         delay_upper_entry.grid(row=cur_row, column=2, **args_entry)
-        
+
+        # popup dismissal (auto-join): toggle + delay before first dismissal attempt
+        cur_row += 1
+        self.auto_dismiss_popup_var = tk.BooleanVar(value=self.st.auto_dismiss_popup)
+        _check = ttk.Checkbutton(
+            main_frame, variable=self.auto_dismiss_popup_var, text=self.st.lan().AUTO_DISMISS_POPUP, width=std_wid*2)
+        _check.grid(row=cur_row, column=0, columnspan=2, **args_entry)
+        _label = ttk.Label(main_frame, text=self.st.lan().POPUP_DISMISS_DELAY)
+        _label.grid(row=cur_row, column=2, **args_label)
+        self.popup_dismiss_delay_var = tk.DoubleVar(value=self.st.popup_dismiss_delay)
+        _entry = tk.Entry(main_frame, textvariable=self.popup_dismiss_delay_var, width=std_wid)
+        _entry.grid(row=cur_row, column=3, **args_entry)
+
         # tips :Settings
         cur_row += 1
         label_settings = ttk.Label(main_frame, text=self.st.lan().SETTINGS_TIPS, width=std_wid*4)
@@ -354,7 +366,13 @@ class SettingsWindow(tk.Toplevel):
             return
         delay_lower_new = max(0,delay_lower_new)
         delay_upper_new = max(delay_lower_new, delay_upper_new)
-        
+        try:
+            popup_dismiss_delay_new = self.popup_dismiss_delay_var.get()
+        except Exception as _e:
+            messagebox.showerror("⚠", self.st.lan().POPUP_DISMISS_DELAY)
+            return
+        popup_dismiss_delay_new = min(300, max(3, popup_dismiss_delay_new))
+
         # === save new values to setting ===        
         self.st.auto_launch_browser = self.auto_launch_var.get()
         self.st.browser_width = width_new
@@ -383,9 +401,11 @@ class SettingsWindow(tk.Toplevel):
         self.st.auto_dahai_drag = self.auto_drag_dahai_var.get()
         self.st.auto_random_move = self.random_move_var.get()
         self.st.ai_randomize_choice = randomized_choice_new
-        self.st.auto_reply_emoji_rate = reply_emoji_new        
+        self.st.auto_reply_emoji_rate = reply_emoji_new
         self.st.delay_random_lower = delay_lower_new
         self.st.delay_random_upper = delay_upper_new
+        self.st.auto_dismiss_popup = self.auto_dismiss_popup_var.get()
+        self.st.popup_dismiss_delay = popup_dismiss_delay_new
         
         self.st.save_json()
         self.exit_save = True

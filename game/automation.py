@@ -19,6 +19,7 @@ from common.settings import Settings
 from common.utils import UiState, GAME_MODES
 
 from .img_proc import ImgTemp, GameVisual
+from .icon_detect import IconDetector
 from .browser import GameBrowser
 from .game_state import GameInfo, GameState
 
@@ -188,6 +189,11 @@ class ActionStepWheel(ActionStep):
 class ActionStepDelay(ActionStep):
     """ Delay action"""
     delay:float
+
+@dataclass
+class ActionStepReload(ActionStep):
+    """ Reload the game page (popup-dismiss escalation). Routed through run_step so the
+    task's stop event is checked before it fires (a direct executor call would escape it)."""
         
 class AutomationTask:
     """ Managing automation task and its thread
@@ -237,6 +243,8 @@ class AutomationTask:
             self.executor.mouse_wheel(step.dx, step.dy, True)
         elif isinstance(step, ActionStepDelay):
             time.sleep(step.delay)
+        elif isinstance(step, ActionStepReload):
+            self.executor.reload()
         else:
             raise NotImplementedError(f"Execution not implemented for step type {type(step)}")
         self.last_exe_time = time.time()
@@ -277,6 +285,18 @@ class AutomationTask:
 END_GAME = "Auto_EndGame"
 JOIN_GAME = "Auto_JoinGame"
 
+# Popup dismissal (while waiting for main menu): seconds between dismissal attempts, and how
+# many attempts (valid menu-less frames, icon found or not) before escalating to a page reload.
+POPUP_DISMISS_RETRY_SEC = 4.0
+POPUP_DISMISS_MAX_ATTEMPTS = 8
+# dismissal stays armed at most this long after a lobby login (login popups appear right away;
+# a stale armed flag must not fire e.g. when auto-join is enabled mid-session while queueing)
+POPUP_DISMISS_ARMED_WINDOW_SEC = 300
+# min gap between reload escalations. Instance-level (not per-task): the reload ends the lobby
+# WS flow which kills the JOIN task, and the automatic re-login starts a fresh one — so any
+# per-task "reload once" flag resets itself and would allow an endless reload/re-login storm.
+POPUP_RELOAD_COOLDOWN_SEC = 900
+
 class Automation:
     """ Convert mjai reaction messages to browser actions, automating the AI actions on Majsoul.
     Screen positions are calculated using pre-defined constants in 16x9 resolution,
@@ -287,10 +307,17 @@ class Automation:
         self.executor = browser
         self.st = setting
         self.g_v = GameVisual(browser)
+        self.icon_detector = IconDetector()     # for dismissing popups blocking the main menu
         
-        self._task:AutomationTask = None        # the task thread        
-        self.ui_state:UiState = UiState.NOT_RUNNING   # Where game UI is at. initially not running 
-        
+        self._task:AutomationTask = None        # the task thread
+        self.ui_state:UiState = UiState.NOT_RUNNING   # Where game UI is at. initially not running
+        # popup dismissal is armed at lobby login and disarmed once the main menu is first seen:
+        # login popups block the menu, but later menu-wait loops (e.g. while queueing for a match,
+        # where ui_state stays MAIN_MENU and the template never matches) must never click anything.
+        self._dismiss_armed:bool = False
+        self._dismiss_armed_until:float = 0.0   # hard time bound on the armed window
+        self._popup_reload_at:float = 0.0       # last reload escalation (cooldown, survives task churn)
+
         self.last_emoji_time:float = 0.0        # timestamp of last emoji sent   
     
     def is_running_execution(self):
@@ -762,6 +789,8 @@ class Automation:
         if self.ui_state != UiState.IN_GAME:
             self.stop_previous()
             self.ui_state = UiState.MAIN_MENU
+            self._dismiss_armed = True      # login popups may cover the menu; allow dismissing them
+            self._dismiss_armed_until = time.time() + POPUP_DISMISS_ARMED_WINDOW_SEC
 
     def on_enter_game(self):
         """ enter game handler"""
@@ -834,16 +863,71 @@ class Automation:
         self._task.start_action_steps(self._join_game_iter(), None)
         return True
     
+    def _can_dismiss_popup(self) -> bool:
+        """ popup dismissal allowed: enabled, armed by a recent lobby login (armed flag is
+        cleared once the main menu is first seen, and hard-expires after the armed window)"""
+        return (self.st.auto_dismiss_popup and self._dismiss_armed
+                and time.time() < self._dismiss_armed_until)
+
     def _join_game_iter(self) -> Iterator[ActionStep]:
         # generate action steps for joining next game
         thres = self.st.main_menu_match_threshold
+        next_dismiss = time.time() + self.st.popup_dismiss_delay    # earliest popup-dismiss attempt
+        dismiss_attempts = 0    # valid menu-less frames examined (icon found or not)
         while True:     # Wait for main menu
             res, diff = self.g_v.comp_temp(ImgTemp.MAIN_MENU, thres)
             if res:
                 LOGGER.debug("Visual sees main menu with diff %.1f", diff)
                 self.ui_state = UiState.MAIN_MENU
+                self._dismiss_armed = False     # menu reached: no dismissal until next login
                 break
             LOGGER.debug("Join game: waiting for main menu (template diff=%.1f, threshold=%.0f)", diff, thres)
+
+            # menu hidden for a while: a popup (announcement/event/rankings...) may be covering it.
+            # Detect close/return icons and click them; escalate to one page reload if that fails.
+            # Only while armed (after login, before the menu was ever seen) -- a menu-wait during
+            # match queueing must never click, whatever the detector thinks it sees.
+            if self._can_dismiss_popup() and time.time() >= next_dismiss:
+                if dismiss_attempts >= POPUP_DISMISS_MAX_ATTEMPTS or not self.icon_detector.available():
+                    # clicking exhausted (or impossible without a model): escalate to a page reload,
+                    # rate-limited on the instance because the reload kills this very task (WS flow
+                    # ends -> on_exit_lobby -> stop_previous) and the re-login re-arms a fresh one.
+                    if time.time() - self._popup_reload_at >= POPUP_RELOAD_COOLDOWN_SEC:
+                        LOGGER.warning("Popup dismiss: no main menu after %d dismiss attempts; reloading page",
+                                       dismiss_attempts)
+                        self._popup_reload_at = time.time()
+                        dismiss_attempts = 0
+                        next_dismiss = time.time() + max(30.0, self.st.popup_dismiss_delay)  # allow page load
+                        yield ActionStepReload()
+                    else:   # clicking and reload both exhausted: give up, keep waiting passively
+                        LOGGER.warning("Popup dismiss: attempts exhausted, reload on cooldown; giving up dismissal")
+                        next_dismiss = float('inf')
+                else:
+                    img = self.executor.screen_shot()
+                    if img is None:     # page busy/loading: not a real attempt, just retry later
+                        next_dismiss = time.time() + POPUP_DISMISS_RETRY_SEC
+                    else:
+                        # menu-check and icon detection decide on the SAME frame (issue-#101 pattern)
+                        res, diff = self.g_v.comp_temp(ImgTemp.MAIN_MENU, thres, img)
+                        if res:
+                            LOGGER.debug("Visual sees main menu with diff %.1f (dismissal frame)", diff)
+                            self.ui_state = UiState.MAIN_MENU
+                            self._dismiss_armed = False
+                            break
+                        dismiss_attempts += 1
+                        dets = self.icon_detector.detect(img, self.st.popup_dismiss_threshold)
+                        if dets:
+                            best = dets[0]
+                            LOGGER.info("Popup dismiss: clicking %s at (%.2f, %.2f) score=%.2f (attempt %d/%d)",
+                                        best.icon, best.x, best.y, best.score,
+                                        dismiss_attempts, POPUP_DISMISS_MAX_ATTEMPTS)
+                            for step in self.steps_randomized_move_click(best.x, best.y):
+                                yield step
+                        else:
+                            LOGGER.debug("Popup dismiss: no icon above threshold %.2f (attempt %d/%d)",
+                                         self.st.popup_dismiss_threshold,
+                                         dismiss_attempts, POPUP_DISMISS_MAX_ATTEMPTS)
+                        next_dismiss = time.time() + POPUP_DISMISS_RETRY_SEC
             yield ActionStepDelay(random.uniform(0.5, 1))
         
         # click on Ranked Mode

@@ -82,15 +82,19 @@ class GameVisual:
             self.temp_dict[loc] = (img_mainmenu, mask_mainmenu)
 
 
-    def comp_temp(self, tmp:ImgTemp, thres:float=30) -> tuple[bool, float]:
+    def comp_temp(self, tmp:ImgTemp, thres:float=30, img_bytes:bytes=None) -> tuple[bool, float]:
         """ compare current screen to template
         params:
             tmp (ImgTemp): template img to compare to
             thres (float): threshold, diff lower than which is considered a match
+            img_bytes (bytes): optional pre-taken screenshot; None -> take a fresh one.
+                pass it when the same frame must drive several decisions (e.g. menu check
+                + popup icon detection), so they can't disagree due to staleness
         return:
             bool: True if the current screen matches the template
             float: average difference between current screen and loc template"""
-        img_bytes = self.browser.screen_shot()
+        if img_bytes is None:
+            img_bytes = self.browser.screen_shot()
         if img_bytes is None:
             return False, -1
         img_io = io.BytesIO(img_bytes)

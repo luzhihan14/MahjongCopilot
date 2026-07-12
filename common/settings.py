@@ -87,6 +87,13 @@ class Settings:
         # and restart auto-join after this many minutes.
         self.enable_auto_loop:bool = self._get_value("enable_auto_loop", False, self.valid_bool)
         self.auto_loop_interval:float = self._get_value("auto_loop_interval", 5.0, lambda x: 0 < x <= 1440)
+        # Popup dismissal: while auto-join waits for the main menu, if it stays hidden for
+        # popup_dismiss_delay seconds, detect close/return icons (CNN, game/icon_detect.py)
+        # and click them to dismiss popups blocking the menu. Threshold = min icon confidence.
+        self.auto_dismiss_popup:bool = self._get_value("auto_dismiss_popup", True, self.valid_bool)
+        self.popup_dismiss_delay:float = self._get_value("popup_dismiss_delay", 15.0, lambda x: 3 <= x <= 300)
+        self.popup_dismiss_threshold:float = self._get_value(
+            "popup_dismiss_threshold", 0.9, lambda x: 0.3 <= x <= 0.99)
 
         self.save_json()
         LOGGER.info("Settings initialized and saved to %s", self._json_file)

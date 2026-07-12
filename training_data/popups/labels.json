@@ -1,0 +1,44 @@
+{
+    "comment": "Icon labels for the popup-dismiss detector. canvas_xywh = game-canvas region inside each raw screenshot (window chrome excluded); icon box_xywh are CANVAS-relative pixels at the canvas resolution below.",
+    "canvas_xywh": [56, 125, 960, 540],
+    "ref_size": [960, 540],
+    "classes": ["close_x", "return_arrow"],
+    "screenshots": [
+        {
+            "file": "close_1.png",
+            "icons": [
+                {"class": "close_x", "variant": "red_diamond", "box_xywh": [791, 72, 44, 44]}
+            ]
+        },
+        {
+            "file": "close_2.png",
+            "icons": [
+                {"class": "close_x", "variant": "gray_x", "box_xywh": [834, 46, 34, 34]}
+            ]
+        },
+        {
+            "file": "return_1.png",
+            "icons": [
+                {"class": "return_arrow", "variant": "blue_badge_shop", "box_xywh": [5, 10, 66, 66]}
+            ]
+        },
+        {
+            "file": "return_2.png",
+            "icons": [
+                {"class": "return_arrow", "variant": "gold_dark_mail", "box_xywh": [856, 72, 46, 46]}
+            ]
+        },
+        {
+            "file": "return_3.png",
+            "icons": [
+                {"class": "return_arrow", "variant": "gold_lantern_event", "box_xywh": [888, 96, 44, 52]}
+            ]
+        },
+        {
+            "file": "return_4.png",
+            "icons": [
+                {"class": "return_arrow", "variant": "blue_badge_event", "box_xywh": [11, 9, 64, 64]}
+            ]
+        }
+    ]
+}

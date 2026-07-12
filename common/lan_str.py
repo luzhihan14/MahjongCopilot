@@ -81,7 +81,10 @@ class LanStr:
     DRAG_DAHAI = "Mouse drag dahai"
     RANDOM_CHOICE = "Randomize AI Choice"
     REPLY_EMOJI_CHANCE = "Reply Emoji Rate"
-    RANDOM_DELAY_RANGE = "Base Delay Range (sec)"    
+    RANDOM_DELAY_RANGE = "Base Delay Range (sec)"
+    AUTO_DISMISS_POPUP = "Auto Dismiss Popup"
+    POPUP_DISMISS_DELAY = "Dismiss Delay (sec)"
+    POPUP_DISMISS_THRESHOLD = "Detect Threshold"
     GAME_LEVELS = ["Bronze", "Silver", "Gold", "Jade", "Throne"]
     GAME_MODES = ["4-P East","4-P South","3-P East","3-P South"]
     MOUSE_RANDOM_MOVE = "Randomize Move"
@@ -234,6 +237,9 @@ class LanStrZHS(LanStr):
     REPLY_EMOJI_CHANCE = "回复表情概率"
     
     RANDOM_DELAY_RANGE = "基础延迟随机范围(秒)"
+    AUTO_DISMISS_POPUP = "自动关闭弹窗"
+    POPUP_DISMISS_DELAY = "关弹窗延时(秒)"
+    POPUP_DISMISS_THRESHOLD = "弹窗识别阈值"
     GAME_LEVELS = ["铜之间", "银之间", "金之间", "玉之间", "王座之间"]
     GAME_MODES = ["四人东","四人南","三人东","三人南"]
     MOUSE_RANDOM_MOVE = "鼠标移动随机化"
