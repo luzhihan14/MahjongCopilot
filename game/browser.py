@@ -1,4 +1,5 @@
 """ Game Broswer class for controlling maj-soul web client operations"""
+import base64
 import logging
 import time
 import threading
@@ -35,6 +36,7 @@ class GameBrowser:
         """ initialize internal variables"""
         self.context:BrowserContext = None
         self.page:Page = None        # playwright page, only used by thread
+        self._cdp = None             # CDP session for screenshots, only used by browser thread
         self.fps_counter = FPSCounter()
 
         # for tracking page info
@@ -563,8 +565,15 @@ class GameBrowser:
             res_queue: queue for saving the image buff data"""
         if self.is_page_normal():
             try:
-                ss_bytes:BytesIO = self.page.screenshot(timeout=time_ms)
-                res_queue.put(ss_bytes)
+                # Capture through a raw CDP command instead of page.screenshot(): Playwright's
+                # wrapper waits for the page to "settle" (fonts ready + rAF quiesce) before it
+                # captures, and Majsoul's WebGL canvas animates forever, so that wait never
+                # finishes and every call hangs to the full timeout. Page.captureScreenshot has
+                # no such wait and returns a real composited frame in well under a second.
+                if self._cdp is None:
+                    self._cdp = self.context.new_cdp_session(self.page)
+                res = self._cdp.send("Page.captureScreenshot", {"format": "png"})
+                res_queue.put(base64.b64decode(res["data"]))
             except PlaywrightTimeoutError:
                 # expected while the page is still loading (e.g. right after an auto-loop relaunch);
                 # the caller just retries, so keep this quiet (visible only with -debug)
@@ -572,6 +581,7 @@ class GameBrowser:
                 res_queue.put(None)
             except Exception as e:  # pylint: disable=broad-except
                 LOGGER.warning("Error taking screenshot: %s", e)
+                self._cdp = None    # session may be dead (page reloaded/closed); rebuild next time
                 res_queue.put(None)
         else:
             res_queue.put(None)
