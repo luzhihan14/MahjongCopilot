@@ -289,13 +289,15 @@ JOIN_GAME = "Auto_JoinGame"
 # many attempts (valid menu-less frames, icon found or not) before escalating to a page reload.
 POPUP_DISMISS_RETRY_SEC = 4.0
 POPUP_DISMISS_MAX_ATTEMPTS = 8
-# dismissal stays armed at most this long after a lobby login (login popups appear right away;
-# a stale armed flag must not fire e.g. when auto-join is enabled mid-session while queueing)
-POPUP_DISMISS_ARMED_WINDOW_SEC = 300
 # min gap between reload escalations. Instance-level (not per-task): the reload ends the lobby
 # WS flow which kills the JOIN task, and the automatic re-login starts a fresh one — so any
 # per-task "reload once" flag resets itself and would allow an endless reload/re-login storm.
 POPUP_RELOAD_COOLDOWN_SEC = 900
+# _queueing older than this is considered stale and stops suppressing dismissal: a real queue
+# resolves into a game (authGame) or back to the menu well within this; a "queue" that pends
+# longer means the mode click missed or the queue died into a dialog, and without this bound
+# every recovery path (icon clicks AND the reload escalation) would stay gated off forever.
+QUEUEING_STALE_SEC = 600
 
 class Automation:
     """ Convert mjai reaction messages to browser actions, automating the AI actions on Majsoul.
@@ -311,11 +313,14 @@ class Automation:
         
         self._task:AutomationTask = None        # the task thread
         self.ui_state:UiState = UiState.NOT_RUNNING   # Where game UI is at. initially not running
-        # popup dismissal is armed at lobby login and disarmed once the main menu is first seen:
-        # login popups block the menu, but later menu-wait loops (e.g. while queueing for a match,
-        # where ui_state stays MAIN_MENU and the template never matches) must never click anything.
-        self._dismiss_armed:bool = False
-        self._dismiss_armed_until:float = 0.0   # hard time bound on the armed window
+        # popup dismissal runs whenever the join loop waits on the main menu (login popups, an
+        # accidentally opened shop/event page, ...) EXCEPT while queueing for a match: after the
+        # join clicks, ui_state stays MAIN_MENU and the template does not match the queue screen,
+        # so the wait loop spins -- clicking anything there could cancel the queue. _queueing
+        # tracks that window causally: set when the join clicks complete, cleared when the game
+        # starts or the menu is seen again (queue cancelled) or the lobby session changes.
+        self._queueing:bool = False
+        self._queueing_since:float = 0.0        # when _queueing was set (staleness bound)
         self._popup_reload_at:float = 0.0       # last reload escalation (cooldown, survives task churn)
 
         self.last_emoji_time:float = 0.0        # timestamp of last emoji sent   
@@ -789,26 +794,28 @@ class Automation:
         if self.ui_state != UiState.IN_GAME:
             self.stop_previous()
             self.ui_state = UiState.MAIN_MENU
-            self._dismiss_armed = True      # login popups may cover the menu; allow dismissing them
-            self._dismiss_armed_until = time.time() + POPUP_DISMISS_ARMED_WINDOW_SEC
+            self._queueing = False      # fresh lobby session: not in a match queue
 
     def on_enter_game(self):
         """ enter game handler"""
         self.stop_previous()
         self.ui_state = UiState.IN_GAME
+        self._queueing = False          # queue resolved into a game
 
     def on_end_game(self):
         """ end game handler"""
         self.stop_previous()
         if self.ui_state != UiState.NOT_RUNNING:
             self.ui_state = UiState.GAME_ENDING
+        self._queueing = False      # a game just ended: certainly not waiting in a queue
         # if auto next. go to lobby, then next
-        
+
     def on_exit_lobby(self):
         """ exit lobby handler"""
         if self.ui_state != UiState.IN_GAME:
             self.stop_previous()
             self.ui_state = UiState.NOT_RUNNING
+            self._queueing = False      # lobby session over (page reload/close)
    
     def automate_end_game(self):
         """Automate Game end go back to menu"""  
@@ -864,10 +871,19 @@ class Automation:
         return True
     
     def _can_dismiss_popup(self) -> bool:
-        """ popup dismissal allowed: enabled, armed by a recent lobby login (armed flag is
-        cleared once the main menu is first seen, and hard-expires after the armed window)"""
-        return (self.st.auto_dismiss_popup and self._dismiss_armed
-                and time.time() < self._dismiss_armed_until)
+        """ popup dismissal allowed: enabled, and not waiting in a match queue (the queue screen
+        does not match the menu template; clicking a false positive there could cancel the queue).
+        A stale queueing state (no game and no menu for QUEUEING_STALE_SEC) stops suppressing:
+        the mode click missed, or the queue died into a dialog -- recovery must be allowed."""
+        if not self.st.auto_dismiss_popup:
+            return False
+        if self._queueing:
+            if time.time() - self._queueing_since < QUEUEING_STALE_SEC:
+                return False
+            LOGGER.warning("Popup dismiss: queueing state stale (no game/menu for %.0fs); allowing recovery",
+                           QUEUEING_STALE_SEC)
+            self._queueing = False
+        return True
 
     def _join_game_iter(self) -> Iterator[ActionStep]:
         # generate action steps for joining next game
@@ -875,18 +891,23 @@ class Automation:
         next_dismiss = time.time() + self.st.popup_dismiss_delay    # earliest popup-dismiss attempt
         dismiss_attempts = 0    # valid menu-less frames examined (icon found or not)
         while True:     # Wait for main menu
+            if not self.st.auto_join_game:
+                # auto-join was turned off mid-wait: stop cleanly. This also makes toggling
+                # auto-join off the way to browse the lobby manually without dismissal
+                # clicking/reloading whatever screen the user opened.
+                LOGGER.debug("Join game: auto_join disabled; stopping menu wait")
+                return
             res, diff = self.g_v.comp_temp(ImgTemp.MAIN_MENU, thres)
             if res:
                 LOGGER.debug("Visual sees main menu with diff %.1f", diff)
                 self.ui_state = UiState.MAIN_MENU
-                self._dismiss_armed = False     # menu reached: no dismissal until next login
+                self._queueing = False      # menu visible: any previous queue is gone
                 break
             LOGGER.debug("Join game: waiting for main menu (template diff=%.1f, threshold=%.0f)", diff, thres)
 
-            # menu hidden for a while: a popup (announcement/event/rankings...) may be covering it.
+            # menu hidden for a while: a popup or page (announcement/event/shop...) is covering it.
             # Detect close/return icons and click them; escalate to one page reload if that fails.
-            # Only while armed (after login, before the menu was ever seen) -- a menu-wait during
-            # match queueing must never click, whatever the detector thinks it sees.
+            # Never while queueing for a match -- clicking there could cancel the queue.
             if self._can_dismiss_popup() and time.time() >= next_dismiss:
                 if dismiss_attempts >= POPUP_DISMISS_MAX_ATTEMPTS or not self.icon_detector.available():
                     # clicking exhausted (or impossible without a model): escalate to a page reload,
@@ -912,7 +933,7 @@ class Automation:
                         if res:
                             LOGGER.debug("Visual sees main menu with diff %.1f (dismissal frame)", diff)
                             self.ui_state = UiState.MAIN_MENU
-                            self._dismiss_armed = False
+                            self._queueing = False
                             break
                         dismiss_attempts += 1
                         dets = self.icon_detector.detect(img, self.st.popup_dismiss_threshold)
@@ -954,8 +975,14 @@ class Automation:
         mode_idx = GAME_MODES.index(self.st.auto_join_mode)
         x,y = Positions.MODES[mode_idx]
         for step in self.steps_randomized_move_click(x,y):
-            yield step    
-    
+            yield step
+        # mode clicked -> now in the match queue. Suppress popup dismissal until the game starts
+        # or the menu is seen again (queue cancelled), bounded by QUEUEING_STALE_SEC -- see
+        # _can_dismiss_popup.
+        self._queueing = True
+        self._queueing_since = time.time()
+        LOGGER.debug("Join clicks done; popup dismissal suppressed while queueing")
+
     def decide_lobby_action(self):
         """ decide what "lobby action" to execute based on current state."""
         if not self.can_automate(True):
